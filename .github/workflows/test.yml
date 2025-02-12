@@ -1,43 +1,36 @@
-name: CI
+name: Makefile CI
 
 on:
   push:
+    branches: ["main"]
   pull_request:
-  workflow_dispatch:
-
-env:
-  FOUNDRY_PROFILE: ci
+    branches: ["main"]
 
 jobs:
-  check:
-    strategy:
-      fail-fast: true
-
-    name: Foundry project
+  build:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
+
+      - name: configure
+        run: ./configure
 
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: nightly
 
-      - name: Show Forge version
+      - name: Install Dependencies
         run: |
-          forge --version
+          forge install
 
-      - name: Run Forge fmt
+      - name: Run build
         run: |
-          forge fmt --check
-        id: fmt
+          export PATH="/home/runner/.config/.foundry/bin:$PATH";
+          make build;
 
-      - name: Run Forge build
+      - name: Run tests
         run: |
-          forge build --sizes
-        id: build
-
-      - name: Run Forge tests
-        run: |
-          forge test -vvv
-        id: test
+          export PATH="/home/runner/.config/.foundry/bin:$PATH";
+          make test;
