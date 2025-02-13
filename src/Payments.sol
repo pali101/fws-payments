@@ -12,34 +12,91 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
     using SafeERC20 for IERC20;
 
     struct Account {
-        address owner;           // allowed to operate on the account
-        uint256 funds;          // amount of funds in the account
-        uint256 lockupBase;     // locked funds (always non-negative)
-        uint256 lockupRate;     // rate at which funds are locked (always non-negative)
-        uint256 lockupStart;    // epoch at which the lockup rate begins to apply
-        uint256 lockupInsufficientSince;  // epoch when account stopped having enough locked funds
+        // The address of the account owner.
+        address owner;
+
+        // The total amount of funds in the account, including both locked and unlocked funds.
+        uint256 funds;
+
+        // The required amount of funds that should be locked in the account. This reflects three components:
+        // 1. Fixed lockups from all rails associated with this account.
+        // 2. Accumulated rate-based lockups that have been converted to fixed lockups across all rails.
+        // 3. Funds reserved for future payments based on current payment rates and lockup periods across all rails.
+        uint256 requiredTotalLockedFunds;
+
+        // The total rate at which funds are being locked for this account.
+        // This is the sum of all payment rates across all active rails for this account.
+        uint256 totalLockupRate;
+
+        // The last epoch when rate-based lockup was accumulated into the `requiredTotalLockedFunds`.
+        // Used to calculate the amount of rate-based lockup to convert to fixed lockup.
+        uint256 lastRateAccumulationAt;
+
+        // The epoch since which the account has had insufficient funds to cover its lockup.
+        // A value of 0 indicates the account has sufficient funds
+        uint256 lockupInsufficientSince;
     }
 
     struct Rail {
-        bool    isRateSet;
-        address token;          // token being used for payment
-        address from;           // payer address
-        address to;            // payee address
-        address operator;      // operator address (typically the market contract)
-        address arbiter;       // optional arbiter address for payment validation
-        uint256 paymentRate;   // rate at which this rail pays the payee
-        uint256 lockupPeriod;  // time into the future up-to-which funds will always be locked
-        uint256 lockupFixed;   // fixed amount of locked funds
-        uint256 lastSettledAt; // epoch at which the rail was last settled
+        // Indicates whether this rail is currently active.
+        // When set to false, the rail is considered "deleted" or inactive.
+        bool isActive;
+
+        // The address of the ERC20 token contract used for payments on this rail.
+        address token;
+
+        // The address of the payer (client) who will be sending funds through this rail.
+        address from;
+
+        // The address of the payee (service provider) who will be receiving funds through this rail.
+        address to;
+
+        // The address of the operator (typically a market contract) that manages this rail.
+        // The operator has special permissions to modify rail parameters.
+        address operator;
+
+        // Optional address of an arbiter that can validate payments before they are processed.
+        // If set, this address will be consulted to approve or modify payments before settlement.
+        address arbiter;
+
+        // The rate at which funds are transferred from the payer to the payee.
+        // Measured in tokens per epoch.
+        uint256 paymentRate;
+
+        // The number of epochs into the future for which funds should always be locked.
+        // This ensures that the payer has sufficient funds for future payments.
+        uint256 lockupPeriod;
+
+        // A fixed amount of funds that are locked in addition to the rate-based lockup.
+        // This can be used for upfront payments or as an additional "security deposit".
+        uint256 lockupFixed;
+
+        // The last epoch at which this rail was settled.
+        // Used to calculate the amount owed since the last settlement.
+        uint256 lastSettledAt;
     }
 
     struct OperatorApproval {
+        // Indicates whether the operator is approved to create and modify rails for the payer.
         bool isApproved;
-        address arbitrer; // optional arbitrer address approved for payment validation by the client
-        uint256 maxRate;    // max rate at which operator can establish payments
-        uint256 maxBase;    // amount operator is allowed to spend outside of rate
+
+        // Optional address of the arbiter that can validate payments for rails created by this operator.
+        // If set to address(0), the operator can assign any arbiter they choose when creating a rail.
+        // If set to a non-zero address, it must match the arbiter provided when creating a rail.
+        address arbitrer;
+
+        // The maximum total payment rate allowed across all rails created by this operator.
+        uint256 maxRate;
+
+        // The maximum amount the operator can spend outside of rate-based payments across all rails.
+        // This covers both fixed lockups and one-time payments for all rails managed by this operator.
+        uint256 maxFixedLockup;
+
+        // The current total payment rate used by this operator across all rails.
         uint256 rate_used;
-        uint256 base_used;
+
+        // The current amount used by this operator for fixed lockups and one-time payments across all rails.
+        uint256 fixedLockupUsed;
     }
 
     // Counter for generating unique rail IDs
@@ -47,10 +104,13 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
 
     // token => owner => Account
     mapping(address => mapping(address => Account)) public accounts;
+
     // railId => Rail
     mapping(uint256 => Rail) public rails;
+
     // token => client => operator => Approval
     mapping(address => mapping(address => mapping(address => OperatorApproval))) public operatorApprovals;
+
     // client => operator => railIds
     mapping(address => mapping(address => uint256[])) public clientOperatorRails;
 
@@ -66,8 +126,9 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
 
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
 
-    modifier validateRailExists(uint256 railId) {
+    modifier validateRailActive(uint256 railId) {
         require(rails[railId].from != address(0), "Rail does not exist");
+        require(rails[railId].isActive, "Rail is inactive");
         _;
     }
 
@@ -91,31 +152,30 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
         _;
     }
 
-    /// @notice Approves or modifies approval for an operator to create and manage payment rails
-    /// @dev This sets approval limits for new rails and rail modifications going forward.
+    /// Approves or modifies approval for an operator to create and manage payment rails where the account owner is the payer.
+    /// This sets approval limits for new rails and rail modifications going forward.
     /// When reducing approvals, existing rails continue operating under their original
-    /// terms (i.e. existing rails are grandfathered).
+    /// terms.
     /// However, any modifications to existing rails must fit within these new approval limits.
-    /// @dev Approval tracking works as follows:
-    /// - New rails check against current maxRate/maxBase minus rate_used/base_used
-    /// - Rail modifications (e.g. rate increases) also check against these current limits
-    /// - Existing unmodified rails continue with their original terms
-    /// This allows users to reduce exposure while honoring existing commitments
+    /// Approval tracking works as follows:
+    /// - New rails check against current maxRate/maxBase - rate_used/base_used.
+    /// - Rail modifications (e.g. rate increases) also check against these current limits.
+    /// - Existing unmodified rails continue with their original terms.
+    /// This allows users to reduce exposure while honoring existing commitments.
     /// @param token The ERC20 token address this approval is for
-    /// @param operator The address being approved to create/modify rails
-    /// @param arbiter Optional address that can validate payments (0x0 for none)
-    /// @param maxRate Maximum rate at which the sum of all rails operated by this operator can pay out.
+    /// @param operator The operator address being approved to create/modify rails
+    /// @param arbiter Optional address that can validate payments before settlement
+    /// @param maxRate Maximum rate at which the sum of all rails operated by this operator can pay out
     /// Payments made via rail payment rates count against this limit. Unused rate does not accumulate.
-    /// @param maxBase Maximum amount operator can spend outside of rate-based payments. This covers:
+    /// @param maxFixedLockup Maximum amount operator can spend outside of rate-based payments. This covers:
     /// 1) Lockup amounts (sum of rail.rate * rail.lockup_period + rail.lockup_fixed for all operator rails).
-    /// Lockup modifications count against but do not modify base.
-    /// 2) One-time payments made via ModifyRailPayment's 'once' parameter.
+    /// 2) One-time payments.
     function approveOperator(
         address token,
         address operator,
         address arbiter,
         uint256 maxRate,
-        uint256 maxBase
+        uint256 maxFixedLockup
     ) external onlyAccountOwner(token) {
         require(token != address(0), "Token address cannot be zero");
         require(operator != address(0), "Operator address cannot be zero");
@@ -123,39 +183,41 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
         OperatorApproval storage approval = operatorApprovals[token][msg.sender][operator];
         approval.arbitrer = arbiter;
         approval.maxRate = maxRate;
-        approval.maxBase = maxBase;
+        approval.maxFixedLockup = maxFixedLockup;
         approval.isApproved = true;
     }
 
-    // TODO: Debt handling
+    // TODO: Debt handling and docs
     function terminateOperator(address operator) external  {
         require(operator != address(0), "operator address invalid");
 
-        uint256[] storage railIds = clientOperatorRails[msg.sender][operator];
+        uint256[] memory railIds = clientOperatorRails[msg.sender][operator];
         for (uint256 i = 0; i < railIds.length; i++) {
             Rail storage rail = rails[railIds[i]];
-            require(rail.from == msg.sender, "Not rail owner");
+            require(rail.from == msg.sender, "Not rail payer");
+            if (!rail.isActive) {
+                continue;
+            }
 
             settleRail(railIds[i]);
 
             Account storage account = accounts[rail.token][msg.sender];
-            account.lockupBase -= rail.lockupFixed + (rail.paymentRate * rail.lockupPeriod);
-            account.lockupRate -= rail.paymentRate;
+            account.requiredTotalLockedFunds -= rail.lockupFixed + (rail.paymentRate * rail.lockupPeriod);
+            account.totalLockupRate -= rail.paymentRate;
 
             rail.paymentRate = 0;
             rail.lockupFixed = 0;
             rail.lockupPeriod = 0;
+            rail.isActive = false;
 
             OperatorApproval storage approval = operatorApprovals[rail.token][msg.sender][operator];
             approval.maxRate = 0;
-            approval.maxBase = 0;
-            approval.rate_used = 0;
-            approval.base_used = 0;
+            approval.maxFixedLockup = 0;
             approval.isApproved = false;
         }
     }
 
-    // TODO: Debt payment ?
+    // TODO: Debt handling and docs
     function deposit(address token, address to, uint256 amount) external {
         require(token != address(0), "Token address cannot be zero");
         require(to != address(0), "To address cannot be zero");
@@ -188,8 +250,8 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
 
         applyAccumulatedRateLockup(acct);
 
-        uint256 available = acct.funds > acct.lockupBase
-            ? acct.funds - acct.lockupBase
+        uint256 available = acct.funds > acct.requiredTotalLockedFunds
+            ? acct.funds - acct.requiredTotalLockedFunds
             : 0;
 
         require(amount <= available, "Insufficient unlocked funds for withdrawal");
@@ -197,18 +259,14 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
         IERC20(token).safeTransfer(msg.sender, amount);
     }
 
+    // TODO: Should only the operator be allowed to call this ???
     /// @notice Creates a new payment rail between a payer and payee, initiated by an approved operator.
-    /// @dev This function checks that:
-    /// 1. The token, from, to, and operator addresses are all valid (non-zero).
-    /// 2. Both the payer (from) and payee (to) have existing accounts for the given token.
-    /// 3. The payer account has a non-zero balance.
-    /// 4. The operator has been pre-approved by the payer to create rails on their behalf.
-    /// 5. If the operator approval specifies an arbiter, it must match the one passed to this function.
     /// @param token The ERC20 token to use for payments on this rail.
     /// @param from The payer account.
     /// @param to The payee account.
     /// @param operator The account creating and managing this rail, must be pre-approved by the payer.
-    /// @param arbiter An optional account that can validate payments, must match operator approval if set.
+    /// @param arbiter An optional contract address that can validate payments before settlement,
+    /// must match the arbiter approved by the payer during operator approval if set.
     /// @return railId The unique ID of the newly created payment rail.
     function createRail(
         address token,
@@ -222,15 +280,16 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
         require(to != address(0), "To address cannot be zero");
         require(operator != address(0), "Operator address cannot be zero");
 
+        OperatorApproval memory approval = operatorApprovals[token][from][operator];
+        require(approval.isApproved, "Operator not approved");
+
         Account storage toAccount = accounts[token][to];
         require(toAccount.owner != address(0), "To account does not exist");
+        require(toAccount.funds > 0, "To account has no funds");
+
         Account storage fromAccount = accounts[token][from];
         require(fromAccount.owner != address(0), "From account does not exist");
         require(fromAccount.funds > 0, "From account has no funds");
-        require(toAccount.funds > 0, "To account has no funds");
-
-        OperatorApproval storage approval = operatorApprovals[token][from][operator];
-        require(approval.isApproved, "Operator not approved");
 
         if (approval.arbitrer != address(0)) {
             require(arbiter == approval.arbitrer, "Arbiter mismatch");
@@ -244,18 +303,19 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
         rail.to = to;
         rail.operator = operator;
         rail.arbiter = arbiter;
+        rail.isActive = true;
         rail.lastSettledAt = block.number;
 
-        rails[railId] = rail;
         clientOperatorRails[from][operator].push(railId);
         return railId;
     }
 
+    // TODO: Debt handling and docs
     function modifyRailLockup(
             uint256 railId,
             uint256 period,
             uint256 fixedLockup
-        ) external validateRailExists(railId) validateRailAccountsExist(railId) onlyRailOperator(railId) returns (uint256) {
+        ) external validateRailActive(railId) validateRailAccountsExist(railId) onlyRailOperator(railId) returns (uint256) {
         Rail storage rail = rails[railId];
 
         Account storage payer = accounts[rail.token][rail.from];
@@ -269,32 +329,35 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
         uint256 oldLockup = rail.lockupFixed + (rail.paymentRate * rail.lockupPeriod);
         uint256 newLockup = fixedLockup + (rail.paymentRate * period);
 
-        require(approval.base_used >= oldLockup, "base used cannot be less than oldLockup");
-        require(approval.base_used - oldLockup + newLockup <= approval.maxBase, "Exceeds operator base approval");
-        require(payer.lockupBase >= oldLockup, "payer lockup base cannot be less than oldLockup");
+        // checks to ensure we don't end up with a negative number after subtraction and this should
+        // anyways never happen
+        require(approval.fixedLockupUsed >= oldLockup, "fixedLockupUsed cannot be less than oldLockup");
+        require(payer.requiredTotalLockedFunds >= oldLockup, "payer lockup requiredTotalLockedFunds cannot be less than oldLockup");
 
-        // Update base used
-        approval.base_used = approval.base_used - oldLockup + newLockup;
+        require(approval.fixedLockupUsed - oldLockup + newLockup <= approval.maxFixedLockup, "Exceeds operator fixedLockup approval");
 
-        // Update payer's lockup base
-        payer.lockupBase = payer.lockupBase - oldLockup + newLockup;
+        approval.fixedLockupUsed = approval.fixedLockupUsed - oldLockup + newLockup;
+
+        // Update payer's lockup
+        payer.requiredTotalLockedFunds = payer.requiredTotalLockedFunds - oldLockup + newLockup;
 
         // Update rail lockup parameters
         rail.lockupPeriod = period;
         rail.lockupFixed = fixedLockup;
 
         // Calculate and return deficit if any
-        if (payer.funds < payer.lockupBase) {
-            return payer.lockupBase - payer.funds;
+        if (payer.funds < payer.requiredTotalLockedFunds) {
+            return payer.requiredTotalLockedFunds - payer.funds;
         }
         return 0;
     }
 
+    // TODO: Debt handling and docs
     function modifyRailPayment(
         uint256 railId,
         uint256 rate,
         uint256 once
-    ) external validateRailExists(railId) validateRailAccountsExist(railId) onlyRailOperator(railId) returns (uint256) {
+    ) external validateRailActive(railId) validateRailAccountsExist(railId) onlyRailOperator(railId) returns (uint256) {
         Rail storage rail = rails[railId];
 
         Account storage payer = accounts[rail.token][rail.from];
@@ -307,46 +370,38 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
         // This ensures that all past payments are accounted for before changing the rate
         settleRail(railId);
 
-        // Calculate the change in rate
         uint256 oldRate = rail.paymentRate;
 
         // Check if the new rate exceeds the operator's approval
+        require(approval.rate_used >= oldRate, "rate_used cannot be less than oldRate");
         require(approval.rate_used - oldRate + rate <= approval.maxRate, "Exceeds operator rate approval");
 
         // Update the operator's used rate
         approval.rate_used = approval.rate_used - oldRate + rate;
-
         // Update rail payment rate
         rail.paymentRate = rate;
 
-
         // Handle one-time payment if specified
         if (once > 0) {
-            require(approval.base_used + once <= approval.maxBase, "Exceeds operator base approval");
+            require(approval.fixedLockupUsed + once <= approval.maxFixedLockup, "Exceeds operator fixedLockup approval");
             require(payer.funds >= once, "Insufficient funds for one-time payment");
 
             payer.funds -= once;
             payee.funds += once;
 
-            // Update operator's used base
-            approval.base_used += once;
+            // Update operator's used fixedLockup
+            approval.fixedLockupUsed += once;
         }
 
-        // Update payer's lockup rate and base
-        payer.lockupBase = payer.lockupBase - (oldRate * rail.lockupPeriod) + (rate * rail.lockupPeriod);
-        payer.lockupRate = payer.lockupRate - oldRate + rate;
-
-        // Init lastSettledAt and isRateSet flag when rate is first set for rail
-        if (rate > 0 && !rail.isRateSet) {
-            rail.isRateSet = true;
-            rail.lastSettledAt = block.number;
-        }
+        // Update payer's requiredTotalLockedFunds and totalLockupRate
+        payer.requiredTotalLockedFunds = payer.requiredTotalLockedFunds - (oldRate * rail.lockupPeriod) + (rate * rail.lockupPeriod);
+        payer.totalLockupRate = payer.totalLockupRate - oldRate + rate;
 
         return 0; // No deficit as we assumed user has enough funds
     }
 
 
-    function updateRailArbiter(uint256 railId, address newArbiter) external validateRailExists(railId) onlyRailOperator(railId) {
+    function updateRailArbiter(uint256 railId, address newArbiter) external validateRailActive(railId) onlyRailOperator(railId) {
         Rail storage rail = rails[railId];
 
         // Update the arbiter
@@ -361,7 +416,8 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
     }
 
     // TODO: anybody can call this -> is that okay ?
-    function settleRail(uint256 railId) public validateRailExists(railId) validateRailAccountsExist(railId) {
+    // TODO: Debt handling and docs
+    function settleRail(uint256 railId) public validateRailActive(railId) validateRailAccountsExist(railId) {
         Rail storage rail = rails[railId];
         uint256 currentEpoch = block.number;
         uint256 elapsedTime = currentEpoch - rail.lastSettledAt;
@@ -385,7 +441,7 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
         rail.lastSettledAt = currentEpoch;
 
         // Adjust lockup base for payer
-        payer.lockupBase -= paymentAmount;
+        payer.requiredTotalLockedFunds -= paymentAmount;
     }
 
     // ---- Functions below are all private/internal ----
@@ -395,8 +451,8 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
      * @notice This function converts the rate-based lockup that has accumulated
      * since the last settlement into a fixed base amount.
      *
-     * @dev It updates the `lockupBase` to include the additional funds that should
-     * be locked based on the `lockupRate` and the time elapsed since the last settlement.
+     * @dev It updates the `requiredTotalLockedFunds` to include the additional funds that should
+     * be locked based on the `totalLockupRate` and the time elapsed since the last settlement.
      * Future lockup needs are handled separately when creating or modifying rails.
      *
      * @param acct The Account struct to apply the accumulated rate lockup for
@@ -405,7 +461,7 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
         uint256 currentEpoch = block.number;
 
         // Convert rate-based lockup accumulation to fixed base
-        acct.lockupBase += acct.lockupRate * (currentEpoch - acct.lockupStart);
-        acct.lockupStart = currentEpoch;
+        acct.requiredTotalLockedFunds += acct.totalLockupRate * (currentEpoch - acct.lastRateAccumulationAt);
+        acct.lastRateAccumulationAt = currentEpoch;
     }
 }
