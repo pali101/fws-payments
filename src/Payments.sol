@@ -16,13 +16,12 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
         uint256 funds;          // amount of funds in the account
         uint256 lockupBase;     // locked funds (always non-negative)
         uint256 lockupRate;     // rate at which funds are locked (always non-negative)
-        bool hasLockupStarted;
         uint256 lockupStart;    // epoch at which the lockup rate begins to apply
         uint256 lockupInsufficientSince;  // epoch when account stopped having enough locked funds
     }
 
     struct Rail {
-        bool isRateSet;
+        bool    isRateSet;
         address token;          // token being used for payment
         address from;           // payer address
         address to;            // payee address
@@ -336,12 +335,6 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
         // Update payer's lockup rate and base
         payer.lockupBase = payer.lockupBase - (oldRate * rail.lockupPeriod) + (rate * rail.lockupPeriod);
         payer.lockupRate = payer.lockupRate - oldRate + rate;
-
-        // Init hasLockupStarted flag and lockupStart for the first rail with non-zero rate
-        if (rate > 0 && !payer.hasLockupStarted) {
-            payer.hasLockupStarted = true;
-            payer.lockupStart = block.number;
-        }
 
         // Init lastSettledAt and isRateSet flag when rate is first set for rail
         if (rate > 0 && !rail.isRateSet) {
