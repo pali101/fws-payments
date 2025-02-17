@@ -15,22 +15,17 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
         // The address of the account owner.
         address owner;
 
-        // The total amount of funds in the account, including both locked and unlocked funds.
+        // The total amount of funds in the account
         uint256 funds;
 
-        // The required amount of funds that should be locked in the account. This reflects three components:
-        // 1. Fixed lockups from all rails associated with this account.
-        // 2. Accumulated rate-based lockups that have been converted to fixed lockups across all rails.
-        // 3. Funds reserved for future payments based on current payment rates and lockup periods across all rails.
-        uint256 requiredTotalLockedFunds;
+        // Actually locked funds at this point in time
+        uint256 lockup_current;
 
-        // The total rate at which funds are being locked for this account.
-        // This is the sum of all payment rates across all active rails for this account.
-        uint256 totalLockupRate;
+        // The rate at which funds are locked (always non-negative)
+        uint256 lockup_rate;
 
-        // The last epoch when rate-based lockup was accumulated into the `requiredTotalLockedFunds`.
-        // Used to calculate the amount of rate-based lockup to convert to fixed lockup.
-        uint256 lastRateAccumulationAt;
+        // Epoch up to which lockup has been settled (added to lockup_current)
+        uint256 lockup_last_settled_at;
 
         // The epoch since which the account has had insufficient funds to cover its lockup.
         // A value of 0 indicates the account has sufficient funds
@@ -202,8 +197,8 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
             settleRail(railIds[i]);
 
             Account storage account = accounts[rail.token][msg.sender];
-            account.requiredTotalLockedFunds -= rail.lockupFixed + (rail.paymentRate * rail.lockupPeriod);
-            account.totalLockupRate -= rail.paymentRate;
+            account.lockup_current -= rail.lockupFixed + (rail.paymentRate * rail.lockupPeriod);
+            account.lockup_rate -= rail.paymentRate;
 
             rail.paymentRate = 0;
             rail.lockupFixed = 0;
@@ -250,8 +245,8 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
 
         applyAccumulatedRateLockup(acct);
 
-        uint256 available = acct.funds > acct.requiredTotalLockedFunds
-            ? acct.funds - acct.requiredTotalLockedFunds
+        uint256 available = acct.funds > acct.lockup_current
+            ? acct.funds - acct.lockup_current
             : 0;
 
         require(amount <= available, "Insufficient unlocked funds for withdrawal");
@@ -332,22 +327,22 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
         // checks to ensure we don't end up with a negative number after subtraction and this should
         // anyways never happen
         require(approval.fixedLockupUsed >= oldLockup, "fixedLockupUsed cannot be less than oldLockup");
-        require(payer.requiredTotalLockedFunds >= oldLockup, "payer lockup requiredTotalLockedFunds cannot be less than oldLockup");
+        require(payer.lockup_current >= oldLockup, "payer lockup lockup_current cannot be less than oldLockup");
 
         require(approval.fixedLockupUsed - oldLockup + newLockup <= approval.maxFixedLockup, "Exceeds operator fixedLockup approval");
 
         approval.fixedLockupUsed = approval.fixedLockupUsed - oldLockup + newLockup;
 
         // Update payer's lockup
-        payer.requiredTotalLockedFunds = payer.requiredTotalLockedFunds - oldLockup + newLockup;
+        payer.lockup_current = payer.lockup_current - oldLockup + newLockup;
 
         // Update rail lockup parameters
         rail.lockupPeriod = period;
         rail.lockupFixed = fixedLockup;
 
         // Calculate and return deficit if any
-        if (payer.funds < payer.requiredTotalLockedFunds) {
-            return payer.requiredTotalLockedFunds - payer.funds;
+        if (payer.funds < payer.lockup_current) {
+            return payer.lockup_current - payer.funds;
         }
         return 0;
     }
@@ -393,9 +388,9 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
             approval.fixedLockupUsed += once;
         }
 
-        // Update payer's requiredTotalLockedFunds and totalLockupRate
-        payer.requiredTotalLockedFunds = payer.requiredTotalLockedFunds - (oldRate * rail.lockupPeriod) + (rate * rail.lockupPeriod);
-        payer.totalLockupRate = payer.totalLockupRate - oldRate + rate;
+        // Update payer's lockup_current and lockup_rate
+        payer.lockup_current = payer.lockup_current - (oldRate * rail.lockupPeriod) + (rate * rail.lockupPeriod);
+        payer.lockup_rate = payer.lockup_rate - oldRate + rate;
 
         return 0; // No deficit as we assumed user has enough funds
     }
@@ -441,7 +436,7 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
         rail.lastSettledAt = currentEpoch;
 
         // Adjust lockup base for payer
-        payer.requiredTotalLockedFunds -= paymentAmount;
+        payer.lockup_current -= paymentAmount;
     }
 
     // ---- Functions below are all private/internal ----
@@ -451,8 +446,8 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
      * @notice This function converts the rate-based lockup that has accumulated
      * since the last settlement into a fixed base amount.
      *
-     * @dev It updates the `requiredTotalLockedFunds` to include the additional funds that should
-     * be locked based on the `totalLockupRate` and the time elapsed since the last settlement.
+     * @dev It updates the `lockup_current` to include the additional funds that should
+     * be locked based on the `lockup_rate` and the time elapsed since the last settlement.
      * Future lockup needs are handled separately when creating or modifying rails.
      *
      * @param acct The Account struct to apply the accumulated rate lockup for
@@ -461,7 +456,7 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
         uint256 currentEpoch = block.number;
 
         // Convert rate-based lockup accumulation to fixed base
-        acct.requiredTotalLockedFunds += acct.totalLockupRate * (currentEpoch - acct.lastRateAccumulationAt);
-        acct.lastRateAccumulationAt = currentEpoch;
+        acct.lockup_current += acct.lockup_rate * (currentEpoch - acct.lockup_last_settled_at);
+        acct.lockup_last_settled_at = currentEpoch;
     }
 }
