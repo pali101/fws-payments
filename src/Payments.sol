@@ -8,6 +8,30 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 
+
+interface IArbiter {
+    struct ArbitrationResult {
+        bool approved;
+        uint256 modifiedAmount;
+        uint256 settledTo;
+    }
+
+    /**
+     * @notice Arbitrates a payment before settlement
+     * @param railId ID of the rail being settled
+     * @param proposedAmount The proposed payment amount
+     * @param fromEpoch Starting epoch for this settlement
+     * @param toEpoch Ending epoch for this settlement
+     * @return result The arbitration result containing approval and any modifications
+     */
+    function arbitratePayment(
+        uint256 railId,
+        uint256 proposedAmount,
+        uint256 fromEpoch,
+        uint256 toEpoch
+    ) external returns (ArbitrationResult memory result);
+}
+
 contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -26,10 +50,6 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
 
         // Epoch up to which lockup has been settled (added to lockup_current)
         uint256 lockup_last_settled_at;
-
-        // The epoch since which the account has had insufficient funds to cover its lockup.
-        // A value of 0 indicates the account has sufficient funds
-        uint256 lockupInsufficientSince;
     }
 
     struct Rail {
@@ -441,22 +461,44 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
 
     // ---- Functions below are all private/internal ----
 
-    /**
-     * @dev Applies the accumulated rate-based lockup to the account's base lockup.
-     * @notice This function converts the rate-based lockup that has accumulated
-     * since the last settlement into a fixed base amount.
-     *
-     * @dev It updates the `lockup_current` to include the additional funds that should
-     * be locked based on the `lockup_rate` and the time elapsed since the last settlement.
-     * Future lockup needs are handled separately when creating or modifying rails.
-     *
-     * @param acct The Account struct to apply the accumulated rate lockup for
-     */
-    function applyAccumulatedRateLockup(Account storage acct) internal {
+    function settleAccountLockup(Account storage account) internal returns (bool) {
         uint256 currentEpoch = block.number;
+        uint256 elapsedTime = currentEpoch - account.lockup_last_settled_at;
 
-        // Convert rate-based lockup accumulation to fixed base
-        acct.lockup_current += acct.lockup_rate * (currentEpoch - acct.lockup_last_settled_at);
-        acct.lockup_last_settled_at = currentEpoch;
+        if (elapsedTime <= 0) {
+            return true;
+        }
+
+        if (account.lockup_rate == 0) {
+            account.lockup_last_settled_at = currentEpoch;
+            return true;
+        }
+
+        uint256 additionalLockup = account.lockup_rate * elapsedTime;
+
+        if (account.funds >= account.lockup_current + additionalLockup) {
+            // If sufficient, apply full lockup
+            account.lockup_current += additionalLockup;
+            account.lockup_last_settled_at = currentEpoch;
+            return true;
+        } else {
+            // If insufficient, calculate the fractional epoch where funds became insufficient
+            uint256 availableFunds = account.funds > account.lockup_current ? account.funds - account.lockup_current : 0;
+
+            if (availableFunds == 0) {
+                return false;
+            }
+
+            uint256 fractionalEpochs = availableFunds / account.lockup_rate;
+
+            // Round down to the nearest whole epoch
+            uint256 settleEpoch = account.lockup_last_settled_at + fractionalEpochs;
+
+            // Apply lockup up to this point
+            account.lockup_current += account.lockup_rate * fractionalEpochs;
+            account.lockup_last_settled_at = settleEpoch;
+
+            return false;
+        }
     }
 }
