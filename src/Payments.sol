@@ -7,23 +7,15 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-
+import "./RateChangeQueue.sol";
 
 interface IArbiter {
     struct ArbitrationResult {
         bool approved;
         uint256 modifiedAmount;
-        uint256 settledTo;
+        uint256 settledUntil;
     }
 
-    /**
-     * @notice Arbitrates a payment before settlement
-     * @param railId ID of the rail being settled
-     * @param proposedAmount The proposed payment amount
-     * @param fromEpoch Starting epoch for this settlement
-     * @param toEpoch Ending epoch for this settlement
-     * @return result The arbitration result containing approval and any modifications
-     */
     function arbitratePayment(
         uint256 railId,
         uint256 proposedAmount,
@@ -34,88 +26,41 @@ interface IArbiter {
 
 contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, ReentrancyGuard {
     using SafeERC20 for IERC20;
+    using RateChangeQueue for RateChangeQueue.Queue;
 
     struct Account {
-        // The address of the account owner.
-        address owner;
-
-        // The total amount of funds in the account
+        address ownerAddress;
         uint256 funds;
-
-        // Actually locked funds at this point in time
-        uint256 lockup_current;
-
-        // The rate at which funds are locked (always non-negative)
-        uint256 lockup_rate;
-
-        // Epoch up to which lockup has been settled (added to lockup_current)
-        uint256 lockup_last_settled_at;
+        uint256 lockupCurrent;
+        uint256 lockupRate;
+        uint256 lockupLastSettledAt;
     }
 
     struct Rail {
-        // Indicates whether this rail is currently active.
-        // When set to false, the rail is considered "deleted" or inactive.
         bool isActive;
-
-        // The address of the ERC20 token contract used for payments on this rail.
         address token;
-
-        // The address of the payer (client) who will be sending funds through this rail.
         address from;
-
-        // The address of the payee (service provider) who will be receiving funds through this rail.
         address to;
-
-        // The address of the operator (typically a market contract) that manages this rail.
-        // The operator has special permissions to modify rail parameters.
         address operator;
-
-        // Optional address of an arbiter that can validate payments before they are processed.
-        // If set, this address will be consulted to approve or modify payments before settlement.
         address arbiter;
-
-        // The rate at which funds are transferred from the payer to the payee.
-        // Measured in tokens per epoch.
         uint256 paymentRate;
-
-        // The number of epochs into the future for which funds should always be locked.
-        // This ensures that the payer has sufficient funds for future payments.
         uint256 lockupPeriod;
-
-        // A fixed amount of funds that are locked in addition to the rate-based lockup.
-        // This can be used for upfront payments or as an additional "security deposit".
         uint256 lockupFixed;
-
-        // The last epoch at which this rail was settled.
-        // Used to calculate the amount owed since the last settlement.
         uint256 lastSettledAt;
     }
 
     struct OperatorApproval {
-        // Indicates whether the operator is approved to create and modify rails for the payer.
         bool isApproved;
-
-        // Optional address of the arbiter that can validate payments for rails created by this operator.
-        // If set to address(0), the operator can assign any arbiter they choose when creating a rail.
-        // If set to a non-zero address, it must match the arbiter provided when creating a rail.
         address arbitrer;
-
-        // The maximum total payment rate allowed across all rails created by this operator.
-        uint256 maxRate;
-
-        // The maximum amount the operator can spend outside of rate-based payments across all rails.
-        // This covers both fixed lockups and one-time payments for all rails managed by this operator.
-        uint256 maxFixedLockup;
-
-        // The current total payment rate used by this operator across all rails.
-        uint256 rate_used;
-
-        // The current amount used by this operator for fixed lockups and one-time payments across all rails.
-        uint256 fixedLockupUsed;
+        uint256 rateAllowance;
+        uint256 lockupAllowance;
     }
 
+    // railId => RateChangeQueue
+    mapping(uint256 => RateChangeQueue.Queue) public railRateChangeQueues;
+
     // Counter for generating unique rail IDs
-    uint256 private nextRailId;
+    uint256 private _nextRailId;
 
     // token => owner => Account
     mapping(address => mapping(address => Account)) public accounts;
@@ -142,67 +87,49 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
 
     modifier validateRailActive(uint256 railId) {
-        require(rails[railId].from != address(0), "Rail does not exist");
-        require(rails[railId].isActive, "Rail is inactive");
+        require(rails[railId].from != address(0), "rail does not exist");
+        require(rails[railId].isActive, "rail is inactive");
         _;
     }
 
     modifier validateRailAccountsExist(uint256 railId) {
         Rail storage rail = rails[railId];
-        require(rail.from != address(0), "Rail does not exist");
-        require(accounts[rail.token][rail.from].owner != address(0), "From account does not exist");
-        require(accounts[rail.token][rail.to].owner != address(0), "To account does not exist");
+        require(rail.from != address(0), "rail does not exist");
+        require(accounts[rail.token][rail.from].ownerAddress != address(0), "from account does not exist");
+        require(accounts[rail.token][rail.to].ownerAddress != address(0), "to account does not exist");
         _;
     }
 
     modifier onlyRailOperator(uint256 railId) {
-        require(rails[railId].operator == msg.sender, "Only the rail operator can perform this action");
+        require(rails[railId].operator == msg.sender, "only the rail operator can perform this action");
         _;
     }
 
     modifier onlyAccountOwner(address token) {
-        address owner = accounts[token][msg.sender].owner;
-        require(owner != address(0), "Account does not exist");
-        require(owner == msg.sender, "Not account owner");
+        address owner = accounts[token][msg.sender].ownerAddress;
+        require(owner != address(0), "account does not exist");
+        require(owner == msg.sender, "not account owner");
         _;
     }
 
-    /// Approves or modifies approval for an operator to create and manage payment rails where the account owner is the payer.
-    /// This sets approval limits for new rails and rail modifications going forward.
-    /// When reducing approvals, existing rails continue operating under their original
-    /// terms.
-    /// However, any modifications to existing rails must fit within these new approval limits.
-    /// Approval tracking works as follows:
-    /// - New rails check against current maxRate/maxBase - rate_used/base_used.
-    /// - Rail modifications (e.g. rate increases) also check against these current limits.
-    /// - Existing unmodified rails continue with their original terms.
-    /// This allows users to reduce exposure while honoring existing commitments.
-    /// @param token The ERC20 token address this approval is for
-    /// @param operator The operator address being approved to create/modify rails
-    /// @param arbiter Optional address that can validate payments before settlement
-    /// @param maxRate Maximum rate at which the sum of all rails operated by this operator can pay out
-    /// Payments made via rail payment rates count against this limit. Unused rate does not accumulate.
-    /// @param maxFixedLockup Maximum amount operator can spend outside of rate-based payments. This covers:
-    /// 1) Lockup amounts (sum of rail.rate * rail.lockup_period + rail.lockup_fixed for all operator rails).
-    /// 2) One-time payments.
     function approveOperator(
         address token,
         address operator,
         address arbiter,
-        uint256 maxRate,
-        uint256 maxFixedLockup
+        uint256 rateAllowance,
+        uint256 lockupAllowance
     ) external onlyAccountOwner(token) {
-        require(token != address(0), "Token address cannot be zero");
-        require(operator != address(0), "Operator address cannot be zero");
+        require(token != address(0), "token address cannot be zero");
+        require(operator != address(0), "operator address cannot be zero");
 
         OperatorApproval storage approval = operatorApprovals[token][msg.sender][operator];
         approval.arbitrer = arbiter;
-        approval.maxRate = maxRate;
-        approval.maxFixedLockup = maxFixedLockup;
+        approval.rateAllowance = rateAllowance;
+        approval.lockupAllowance = lockupAllowance;
         approval.isApproved = true;
     }
 
-    // TODO: Debt handling and docs
+    // TODO: Revisit
     function terminateOperator(address operator) external  {
         require(operator != address(0), "operator address invalid");
 
@@ -214,11 +141,11 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
                 continue;
             }
 
-            settleRail(railIds[i]);
+            settleRail(railIds[i], block.number);
 
             Account storage account = accounts[rail.token][msg.sender];
-            account.lockup_current -= rail.lockupFixed + (rail.paymentRate * rail.lockupPeriod);
-            account.lockup_rate -= rail.paymentRate;
+            account.lockupCurrent -= rail.lockupFixed + (rail.paymentRate * rail.lockupPeriod);
+            account.lockupRate -= rail.paymentRate;
 
             rail.paymentRate = 0;
             rail.lockupFixed = 0;
@@ -226,22 +153,26 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
             rail.isActive = false;
 
             OperatorApproval storage approval = operatorApprovals[rail.token][msg.sender][operator];
-            approval.maxRate = 0;
-            approval.maxFixedLockup = 0;
+            approval.rateAllowance = 0;
+            approval.lockupAllowance = 0;
             approval.isApproved = false;
         }
     }
 
-    // TODO: Debt handling and docs
+    // TODO: implement
+    function terminateRail() public {
+
+    }
+
     function deposit(address token, address to, uint256 amount) external {
-        require(token != address(0), "Token address cannot be zero");
-        require(to != address(0), "To address cannot be zero");
-        require(amount > 0, "Amount must be greater than 0");
+        require(token != address(0), "token address cannot be zero");
+        require(to != address(0), "to address cannot be zero");
+        require(amount > 0, "amount must be greater than 0");
 
         // Create account if it doesn't exist
         Account storage account = accounts[token][to];
-        if (account.owner == address(0)) {
-            account.owner = to;
+        if (account.ownerAddress == address(0)) {
+            account.ownerAddress = to;
         }
 
         // Transfer tokens from sender to contract
@@ -249,40 +180,26 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
 
         // Update account balance
         account.funds += amount;
+
+        // settle account lockup now that we have more funds
+        settleAccountLockup(account);
     }
 
-    /// @notice Allows an account owner to withdraw funds from their account.
-    /// @dev This function settles the account's lockup before calculating available funds.
-    /// @dev Withdrawal is only possible if the account has sufficient unlocked funds after accounting
-    /// for lockup.
-    /// @dev The available balance for withdrawal is calculated as:
-    ///      max(0, account.funds - account.lockupBase)
-    /// @dev If the requested amount exceeds available unlocked funds, the transaction will revert
-    /// @param token The address of the ERC20 token to withdraw
-    /// @param amount The amount of tokens to withdraw
     function withdraw(address token, uint256 amount) external onlyAccountOwner(token) nonReentrant {
         Account storage acct = accounts[token][msg.sender];
 
-        applyAccumulatedRateLockup(acct);
+        (bool funded, uint256 settleEpoch) = settleAccountLockup(acct);
+        require(funded && settleEpoch == block.number, "insufficient funds");
 
-        uint256 available = acct.funds > acct.lockup_current
-            ? acct.funds - acct.lockup_current
+        uint256 available = acct.funds > acct.lockupCurrent
+            ? acct.funds - acct.lockupCurrent
             : 0;
 
-        require(amount <= available, "Insufficient unlocked funds for withdrawal");
+        require(amount <= available, "insufficient unlocked funds for withdrawal");
         acct.funds -= amount;
         IERC20(token).safeTransfer(msg.sender, amount);
     }
 
-    // TODO: Should only the operator be allowed to call this ???
-    /// @notice Creates a new payment rail between a payer and payee, initiated by an approved operator.
-    /// @param token The ERC20 token to use for payments on this rail.
-    /// @param from The payer account.
-    /// @param to The payee account.
-    /// @param operator The account creating and managing this rail, must be pre-approved by the payer.
-    /// @param arbiter An optional contract address that can validate payments before settlement,
-    /// must match the arbiter approved by the payer during operator approval if set.
-    /// @return railId The unique ID of the newly created payment rail.
     function createRail(
         address token,
         address from,
@@ -290,27 +207,27 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
         address operator,
         address arbiter
     ) external returns (uint256) {
-        require(token != address(0), "Token address cannot be zero");
-        require(from != address(0), "From address cannot be zero");
-        require(to != address(0), "To address cannot be zero");
-        require(operator != address(0), "Operator address cannot be zero");
+        require(token != address(0), "token address cannot be zero");
+        require(from != address(0), "from address cannot be zero");
+        require(to != address(0), "to address cannot be zero");
+        require(operator != address(0), "operator address cannot be zero");
 
         OperatorApproval memory approval = operatorApprovals[token][from][operator];
-        require(approval.isApproved, "Operator not approved");
+        require(approval.isApproved, "operator not approved");
 
         Account storage toAccount = accounts[token][to];
-        require(toAccount.owner != address(0), "To account does not exist");
-        require(toAccount.funds > 0, "To account has no funds");
+        require(toAccount.ownerAddress != address(0), "to account does not exist");
+        require(toAccount.funds > 0, "to account has no funds");
 
         Account storage fromAccount = accounts[token][from];
-        require(fromAccount.owner != address(0), "From account does not exist");
-        require(fromAccount.funds > 0, "From account has no funds");
+        require(fromAccount.ownerAddress != address(0), "from account does not exist");
+        require(fromAccount.funds > 0, "from account has no funds");
 
         if (approval.arbitrer != address(0)) {
-            require(arbiter == approval.arbitrer, "Arbiter mismatch");
+            require(arbiter == approval.arbitrer, "arbiter mismatch");
         }
 
-        uint256 railId = nextRailId++;
+        uint256 railId = _nextRailId++;
 
         Rail storage rail = rails[railId];
         rail.token = token;
@@ -325,180 +242,331 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
         return railId;
     }
 
-    // TODO: Debt handling and docs
     function modifyRailLockup(
             uint256 railId,
             uint256 period,
-            uint256 fixedLockup
-        ) external validateRailActive(railId) validateRailAccountsExist(railId) onlyRailOperator(railId) returns (uint256) {
+            uint256 lockupFixed
+        ) external validateRailActive(railId) validateRailAccountsExist(railId) onlyRailOperator(railId) {
         Rail storage rail = rails[railId];
 
         Account storage payer = accounts[rail.token][rail.from];
 
         OperatorApproval storage approval = operatorApprovals[rail.token][rail.from][rail.operator];
-        require(approval.isApproved, "Operator not approved");
+        require(approval.isApproved, "operator not approved");
 
-        applyAccumulatedRateLockup(payer);
+        // settle account lockup and if account is not funded upto to the current epoch; revert
+        (bool funded, uint256 settleEpoch) = settleAccountLockup(payer);
+        require(funded && settleEpoch == block.number, "cannot modify lockup as client does not have enough funds for current settlement");
 
         // Calculate the change in base lockup
         uint256 oldLockup = rail.lockupFixed + (rail.paymentRate * rail.lockupPeriod);
-        uint256 newLockup = fixedLockup + (rail.paymentRate * period);
+        uint256 newLockup = lockupFixed + (rail.paymentRate * period);
 
-        // checks to ensure we don't end up with a negative number after subtraction and this should
-        // anyways never happen
-        require(approval.fixedLockupUsed >= oldLockup, "fixedLockupUsed cannot be less than oldLockup");
-        require(payer.lockup_current >= oldLockup, "payer lockup lockup_current cannot be less than oldLockup");
-
-        require(approval.fixedLockupUsed - oldLockup + newLockup <= approval.maxFixedLockup, "Exceeds operator fixedLockup approval");
-
-        approval.fixedLockupUsed = approval.fixedLockupUsed - oldLockup + newLockup;
+        // assert that operator allownace is respected
+        require(newLockup <= oldLockup + approval.lockupAllowance, "exceeds operator lockup allowance");
+        approval.lockupAllowance = approval.lockupAllowance + oldLockup - newLockup;
 
         // Update payer's lockup
-        payer.lockup_current = payer.lockup_current - oldLockup + newLockup;
+        require(payer.lockupCurrent >= oldLockup, "payer lockup lockup_current cannot be less than old lockup");
+        payer.lockupCurrent = payer.lockupCurrent - oldLockup + newLockup;
 
         // Update rail lockup parameters
         rail.lockupPeriod = period;
-        rail.lockupFixed = fixedLockup;
+        rail.lockupFixed = lockupFixed;
 
-        // Calculate and return deficit if any
-        if (payer.funds < payer.lockup_current) {
-            return payer.lockup_current - payer.funds;
-        }
-        return 0;
+        require(payer.lockupCurrent <= payer.funds, "payer lockup_current cannot be greater than funds");
     }
 
-    // TODO: Debt handling and docs
     function modifyRailPayment(
         uint256 railId,
-        uint256 rate,
-        uint256 once
-    ) external validateRailActive(railId) validateRailAccountsExist(railId) onlyRailOperator(railId) returns (uint256) {
+        uint256 newRate,
+        uint256 oneTimePayment
+    )
+        external
+        validateRailActive(railId)
+        validateRailAccountsExist(railId)
+        onlyRailOperator(railId)
+        returns (uint256 deficit)
+    {
         Rail storage rail = rails[railId];
-
         Account storage payer = accounts[rail.token][rail.from];
         Account storage payee = accounts[rail.token][rail.to];
 
         OperatorApproval storage approval = operatorApprovals[rail.token][rail.from][rail.operator];
         require(approval.isApproved, "Operator not approved");
 
-        // Settle the rail before modifying payment
-        // This ensures that all past payments are accounted for before changing the rate
-        settleRail(railId);
-
-        uint256 oldRate = rail.paymentRate;
-
-        // Check if the new rate exceeds the operator's approval
-        require(approval.rate_used >= oldRate, "rate_used cannot be less than oldRate");
-        require(approval.rate_used - oldRate + rate <= approval.maxRate, "Exceeds operator rate approval");
-
-        // Update the operator's used rate
-        approval.rate_used = approval.rate_used - oldRate + rate;
-        // Update rail payment rate
-        rail.paymentRate = rate;
-
-        // Handle one-time payment if specified
-        if (once > 0) {
-            require(approval.fixedLockupUsed + once <= approval.maxFixedLockup, "Exceeds operator fixedLockup approval");
-            require(payer.funds >= once, "Insufficient funds for one-time payment");
-
-            payer.funds -= once;
-            payee.funds += once;
-
-            // Update operator's used fixedLockup
-            approval.fixedLockupUsed += once;
+        // Settle the payer's lockup.
+        // If we're changing the rate, we require full settlement.
+        (bool lockupSettled, uint256 settledEpoch) = settleAccountLockup(payer);
+        if (newRate != rail.paymentRate) {
+            require(lockupSettled && settledEpoch == block.number, "lockup not fully settled; cannot change rate");
         }
 
-        // Update payer's lockup_current and lockup_rate
-        payer.lockup_current = payer.lockup_current - (oldRate * rail.lockupPeriod) + (rate * rail.lockupPeriod);
-        payer.lockup_rate = payer.lockup_rate - oldRate + rate;
+        // Save the current rate for computing lockup deltas.
+        uint256 oldRate = rail.paymentRate;
 
-        return 0; // No deficit as we assumed user has enough funds
+        // --- Operator Approval Checks ---
+        validateAndModifyRateChangeApproval(rail, approval, oldRate, newRate, oneTimePayment);
+
+        // --- Settlement Prior to Rate Change ---
+        // If there is no arbiter, settle the rail immediately.
+        if (rail.arbiter == address(0)) {
+            (, uint256 settledUntil) = settleRail(railId, block.number);
+            require(settledUntil == block.number, "not able to settle rail at current epoch");
+        } else {
+            railRateChangeQueues[railId].enqueue(rail.paymentRate, block.number);
+        }
+
+
+        payer.lockupRate = payer.lockupRate - oldRate + newRate;
+        // Update the payer's current locked funds:
+        // Remove the old continuous lockup and also subtract the one-time payment,
+        // then add the new continuous lockup requirement.
+        payer.lockupCurrent = payer.lockupCurrent - (oldRate * rail.lockupPeriod) + (newRate * rail.lockupPeriod) - oneTimePayment;
+
+        rail.paymentRate = newRate;
+        rail.lockupFixed = rail.lockupFixed - oneTimePayment;
+
+        // --- Process the One-Time Payment ---
+        processOneTimePayment(payer, payee, oneTimePayment);
+
+        require(rail.lockupFixed >= 0, "rail lockupFixed must be non-negative");
+        require(payer.lockupCurrent >= 0, "payer lockupCurrent must be non-negative");
+        require(payer.lockupCurrent <= payer.funds, "payer lockup cannot exceed funds");
+
+        return 0;
+    }
+
+    function processOneTimePayment(
+        Account storage payer,
+        Account storage payee,
+        uint256 oneTimePayment
+    ) internal {
+        if (oneTimePayment > 0) {
+            require(payer.funds >= oneTimePayment, "insufficient funds for one-time payment");
+            payer.funds -= oneTimePayment;
+            payee.funds += oneTimePayment;
+        }
+    }
+
+    function validateAndModifyRateChangeApproval(
+        Rail storage rail,
+        OperatorApproval storage approval,
+        uint256 oldRate,
+        uint256 newRate,
+        uint256 oneTimePayment
+    ) internal {
+        require(oneTimePayment <= rail.lockupFixed, "one-time payment exceeds rail fixed lockup");
+
+        uint256 oldLockup = (oldRate * rail.lockupPeriod) + rail.lockupFixed;
+        uint256 newLockup = (newRate * rail.lockupPeriod) + (rail.lockupFixed - oneTimePayment);
+
+        // Check that new total lockup + one time payment is within allowance
+        require(newLockup + oneTimePayment <= oldLockup + approval.lockupAllowance, "exceeds operator lockup allowance");
+        // Adjust the operator's available lockup allowance.
+        approval.lockupAllowance = approval.lockupAllowance + oldLockup - (newLockup + oneTimePayment);
+        require(newRate <= approval.rateAllowance, "new rate exceeds operator rate allowance");
     }
 
 
     function updateRailArbiter(uint256 railId, address newArbiter) external validateRailActive(railId) onlyRailOperator(railId) {
         Rail storage rail = rails[railId];
-
+        OperatorApproval storage approval = operatorApprovals[rail.token][rail.from][rail.operator];
+        require(approval.isApproved, "operator not approved");
+        if (approval.arbitrer != address(0)) {
+            require(newArbiter == approval.arbitrer, "arbiter mismatch");
+        }
         // Update the arbiter
         rail.arbiter = newArbiter;
     }
 
-    // TODO: anybody can call this -> is that okay ?
-    function settleRailBatch(uint256[] calldata railId) public {
-        for (uint256 i = 0; i < railId.length; i++) {
-            settleRail(railId[i]);
-        }
-    }
 
-    // TODO: anybody can call this -> is that okay ?
-    // TODO: Debt handling and docs
-    function settleRail(uint256 railId) public validateRailActive(railId) validateRailAccountsExist(railId) {
+    function settleRail(uint256 railId, uint256 untilEpoch)
+        public
+        validateRailActive(railId)
+        validateRailAccountsExist(railId)
+        returns (
+            uint256 totalSettledAmount,
+            uint256 finalSettledEpoch
+        )
+    {
+        // Get the rail and the involved accounts.
         Rail storage rail = rails[railId];
-        uint256 currentEpoch = block.number;
-        uint256 elapsedTime = currentEpoch - rail.lastSettledAt;
-
-        if (elapsedTime == 0) return;
-
         Account storage payer = accounts[rail.token][rail.from];
         Account storage payee = accounts[rail.token][rail.to];
 
-        // Apply accumulated rate lockup for payer
-        applyAccumulatedRateLockup(payer);
+        settleAccountLockup(payer);
 
-        // Calculate payment amount
-        uint256 paymentAmount = rail.paymentRate * elapsedTime;
+        uint256 settlementTargetEpoch = min(untilEpoch, payer.lockupLastSettledAt + rail.lockupPeriod);
 
-        // Update balances
-        payer.funds -= paymentAmount;
-        payee.funds += paymentAmount;
+        // Begin settlement from the last settled epoch.
+        uint256 currentSettlementEpoch = rail.lastSettledAt;
+        uint256 currentRate = rail.paymentRate;
+        totalSettledAmount = 0;
 
-        // Update last settlement time
-        rail.lastSettledAt = currentEpoch;
+        // Use the rail's rate–change queue.
+        RateChangeQueue.Queue storage rateQueue = railRateChangeQueues[railId];
 
-        // Adjust lockup base for payer
-        payer.lockup_current -= paymentAmount;
+        // If there are no queued rate changes, settle the entire segment in one shot.
+        if (rateQueue.isEmpty()) {
+            (totalSettledAmount, finalSettledEpoch) = _settleSegment(
+                railId,
+                rail,
+                currentSettlementEpoch,
+                settlementTargetEpoch,
+                currentRate
+            );
+        } else {
+            // Otherwise, settle the rail in segments (each up to the next rate–change boundary).
+            (totalSettledAmount, finalSettledEpoch) = _settleWithRateChanges(
+                railId,
+                rail,
+                rateQueue,
+                currentRate,
+                currentSettlementEpoch,
+                settlementTargetEpoch
+            );
+        }
+
+        // Update account balances.
+        payer.funds -= totalSettledAmount;
+        payee.funds += totalSettledAmount;
+        require(payer.lockupCurrent >= totalSettledAmount, "Insufficient lockup funds");
+        payer.lockupCurrent -= totalSettledAmount;
+
+        // Record the new settlement epoch on the rail.
+        rail.lastSettledAt = finalSettledEpoch;
+
+        require(payer.lockupCurrent <= payer.funds, "insufficient funds");
+
+        return (totalSettledAmount, finalSettledEpoch);
     }
 
-    // ---- Functions below are all private/internal ----
+    function _settleSegment(
+        uint256 railId,
+        Rail storage rail,
+        uint256 segmentStart,
+        uint256 segmentEnd,
+        uint256 rate
+    ) internal returns (uint256 settledAmount, uint256 settledUntil) {
+        // Calculate the intended payment for the entire segment.
+        uint256 duration = segmentEnd - segmentStart;
+        settledAmount = rate * duration;
+        settledUntil = segmentEnd;
 
-    function settleAccountLockup(Account storage account) internal returns (bool) {
-        uint256 currentEpoch = block.number;
-        uint256 elapsedTime = currentEpoch - account.lockup_last_settled_at;
-
-        if (elapsedTime <= 0) {
-            return true;
+        if (rail.arbiter != address(0)) {
+            // Call the external arbitrator.
+            IArbiter arbiter = IArbiter(rail.arbiter);
+            IArbiter.ArbitrationResult memory arbResult = arbiter.arbitratePayment(
+                railId,
+                settledAmount,
+                segmentStart,
+                segmentEnd
+            );
+            require(arbResult.approved, "arbitrer refused payment");
+            // Do not settle past the segment end.
+            settledUntil = arbResult.settledUntil;
+            settledAmount = arbResult.modifiedAmount;
         }
 
-        if (account.lockup_rate == 0) {
-            account.lockup_last_settled_at = currentEpoch;
-            return true;
-        }
+        // If no progress is made, revert.
+        require(settledUntil > segmentStart, "no progress made in settlement");
 
-        uint256 additionalLockup = account.lockup_rate * elapsedTime;
+        return (settledAmount, settledUntil);
+    }
+    function _settleWithRateChanges(
+        uint256 railId,
+        Rail storage rail,
+        RateChangeQueue.Queue storage rateQueue,
+        uint256 currentRate,
+        uint256 startEpoch,
+        uint256 targetEpoch
+    ) internal returns (uint256 totalSettled, uint256 finalEpoch) {
+        totalSettled = 0;
+        uint256 currentEpoch = startEpoch;
 
-        if (account.funds >= account.lockup_current + additionalLockup) {
-            // If sufficient, apply full lockup
-            account.lockup_current += additionalLockup;
-            account.lockup_last_settled_at = currentEpoch;
-            return true;
-        } else {
-            // If insufficient, calculate the fractional epoch where funds became insufficient
-            uint256 availableFunds = account.funds > account.lockup_current ? account.funds - account.lockup_current : 0;
-
-            if (availableFunds == 0) {
-                return false;
+        while (currentEpoch < targetEpoch) {
+            // Determine the next boundary: either the next queued rate–change or the targetEpoch.
+            uint256 nextBoundary = targetEpoch;
+            uint256 segmentRate = currentRate;
+            if (!rateQueue.isEmpty()) {
+                RateChangeQueue.RateChange memory nextChange = rateQueue.peek();
+                if (nextChange.untilEpoch > currentEpoch && nextChange.untilEpoch <= targetEpoch) {
+                    nextBoundary = nextChange.untilEpoch;
+                    segmentRate = nextChange.rate;
+                }
             }
 
-            uint256 fractionalEpochs = availableFunds / account.lockup_rate;
+            // Settle the segment from currentEpoch up to nextBoundary.
+            (uint256 segmentAmount, uint256 segmentSettledEpoch) = _settleSegment(
+                railId,
+                rail,
+                currentEpoch,
+                nextBoundary,
+                segmentRate
+            );
+
+
+            require(segmentSettledEpoch <= nextBoundary, "segment settled epoch exceeds boundary");
+
+            // Short circuit and return if _settleSegment returns an epoch less than what we sent it
+            if (segmentSettledEpoch < nextBoundary) {
+                return (totalSettled + segmentAmount, segmentSettledEpoch);
+            }
+
+            totalSettled += segmentAmount;
+            currentEpoch = segmentSettledEpoch;
+            rateQueue.dequeue();
+            }
+
+
+        finalEpoch = currentEpoch;
+        return (totalSettled, finalEpoch);
+    }
+
+    /// @notice Returns the minimum of two numbers.
+    function min(uint256 a, uint256 b) internal pure returns (uint256) {
+        return a < b ? a : b;
+    }
+
+    function settleAccountLockup(Account storage account) internal returns (bool, uint256) {
+        uint256 currentEpoch = block.number;
+        uint256 elapsedTime = currentEpoch - account.lockupLastSettledAt;
+
+        if (elapsedTime <= 0) {
+            return (true, account.lockupLastSettledAt);
+        }
+
+        if (account.lockupRate == 0) {
+            account.lockupLastSettledAt = currentEpoch;
+            return (true, currentEpoch);
+        }
+
+        uint256 additionalLockup = account.lockupRate * elapsedTime;
+
+        if (account.funds >= account.lockupCurrent + additionalLockup) {
+            // If sufficient, apply full lockup
+            account.lockupCurrent += additionalLockup;
+            account.lockupLastSettledAt = currentEpoch;
+            return (true, currentEpoch);
+        } else {
+            // If insufficient, calculate the fractional epoch where funds became insufficient
+            uint256 availableFunds = account.funds > account.lockupCurrent ? account.funds - account.lockupCurrent : 0;
+
+            if (availableFunds == 0) {
+                return (false, account.lockupLastSettledAt);
+            }
+
+            uint256 fractionalEpochs = availableFunds / account.lockupRate;
 
             // Round down to the nearest whole epoch
-            uint256 settleEpoch = account.lockup_last_settled_at + fractionalEpochs;
+            uint256 settleEpoch = account.lockupLastSettledAt + fractionalEpochs;
 
             // Apply lockup up to this point
-            account.lockup_current += account.lockup_rate * fractionalEpochs;
-            account.lockup_last_settled_at = settleEpoch;
+            account.lockupCurrent += account.lockupRate * fractionalEpochs;
+            account.lockupLastSettledAt = settleEpoch;
 
-            return false;
+            return (false, settleEpoch);
         }
     }
 }
