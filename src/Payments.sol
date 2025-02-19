@@ -263,7 +263,7 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
         uint256 oldLockup = rail.lockupFixed + (rail.paymentRate * rail.lockupPeriod);
         uint256 newLockup = lockupFixed + (rail.paymentRate * period);
 
-        // assert that operator allownace is respected
+        // assert that operator allowance is respected
         require(newLockup <= oldLockup + approval.lockupAllowance, "exceeds operator lockup allowance");
         approval.lockupAllowance = approval.lockupAllowance + oldLockup - newLockup;
 
@@ -392,6 +392,7 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
             string memory note
         )
     {
+        require(untilEpoch <= block.number, "failed to settle: cannot settle future epochs");
         // Get the rail and the involved accounts.
         Rail storage rail = rails[railId];
         Account storage payer = accounts[rail.token][rail.from];
@@ -466,6 +467,12 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
                 segmentEnd
             );
             require(arbResult.approved, "arbitrer refused payment");
+
+            require(arbResult.settledUntil <= segmentEnd, "failed to settle: arbiter settled beyond segment end");
+            require(
+                arbResult.modifiedAmount <= rate * (arbResult.settledUntil - segmentStart),
+                "failed to settle: arbiter modified amount exceeds maximum for settled duration"
+            );
             // Do not settle past the segment end.
             settledUntil = arbResult.settledUntil;
             settledAmount = arbResult.modifiedAmount;
@@ -529,7 +536,7 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
     }
 
     /// @notice Returns the minimum of two numbers.
-    function min(uint256 a, uint256 b) internal pure returns (uint256) {
+    function min(uint256 a, uint256 b) public pure returns (uint256) {
         return a < b ? a : b;
     }
 
