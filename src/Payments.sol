@@ -244,10 +244,10 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
     }
 
     function modifyRailLockup(
-            uint256 railId,
-            uint256 period,
-            uint256 lockupFixed
-        ) external validateRailActive(railId) validateRailAccountsExist(railId) onlyRailOperator(railId) {
+        uint256 railId,
+        uint256 period,
+        uint256 lockupFixed
+    ) external validateRailActive(railId) validateRailAccountsExist(railId) onlyRailOperator(railId) {
         Rail storage rail = rails[railId];
 
         Account storage payer = accounts[rail.token][rail.from];
@@ -282,13 +282,7 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
         uint256 railId,
         uint256 newRate,
         uint256 oneTimePayment
-    )
-        external
-        validateRailActive(railId)
-        validateRailAccountsExist(railId)
-        onlyRailOperator(railId)
-        returns (uint256 deficit)
-    {
+    ) external validateRailActive(railId) validateRailAccountsExist(railId) onlyRailOperator(railId) {
         Rail storage rail = rails[railId];
         Account storage payer = accounts[rail.token][rail.from];
         Account storage payee = accounts[rail.token][rail.to];
@@ -298,44 +292,38 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
 
         // Settle the payer's lockup.
         // If we're changing the rate, we require full settlement.
-        (bool lockupSettled, uint256 settledEpoch) = settleAccountLockup(payer);
+        (bool fullySettled, uint256 lockupSettledUpto) = settleAccountLockup(payer);
         if (newRate != rail.paymentRate) {
-            require(lockupSettled && settledEpoch == block.number, "lockup not fully settled; cannot change rate");
+            require(fullySettled && lockupSettledUpto == block.number, "account lockup not fully settled; cannot change rate");
         }
 
-        // Save the current rate for computing lockup deltas.
         uint256 oldRate = rail.paymentRate;
-
         // --- Operator Approval Checks ---
         validateAndModifyRateChangeApproval(rail, approval, oldRate, newRate, oneTimePayment);
 
         // --- Settlement Prior to Rate Change ---
         // If there is no arbiter, settle the rail immediately.
         if (rail.arbiter == address(0)) {
-            (, uint256 settledUntil, ) = settleRail(railId, block.number);
-            require(settledUntil == block.number, "not able to settle rail at current epoch");
+            (, uint256 settledUpto, ) = settleRail(railId, block.number);
+            require(settledUpto == block.number, "not able to settle rail upto current epoch");
         } else {
             railRateChangeQueues[railId].enqueue(rail.paymentRate, block.number);
         }
 
-
-        payer.lockupRate = payer.lockupRate - oldRate + newRate;
-        // Update the payer's current locked funds:
-        // Remove the old continuous lockup and also subtract the one-time payment,
-        // then add the new continuous lockup requirement.
-        payer.lockupCurrent = payer.lockupCurrent - (oldRate * rail.lockupPeriod) + (newRate * rail.lockupPeriod) - oneTimePayment;
-
-        rail.paymentRate = newRate;
+        require(rail.lockupFixed >= oneTimePayment, "one time payment cannot be greater than rail lockupFixed");
         rail.lockupFixed = rail.lockupFixed - oneTimePayment;
+        rail.paymentRate = newRate;
+
+        require(payer.lockupRate >= oldRate, "payer lockup rate cannot be less than old rate");
+        payer.lockupRate = payer.lockupRate - oldRate + newRate;
+
+        require(payer.lockupCurrent >= ((oldRate * rail.lockupPeriod) + oneTimePayment), "failed to modify rail payment: insufficient current lockup");
+        payer.lockupCurrent = payer.lockupCurrent - (oldRate * rail.lockupPeriod) + (newRate * rail.lockupPeriod) - oneTimePayment;        
 
         // --- Process the One-Time Payment ---
         processOneTimePayment(payer, payee, oneTimePayment);
 
-        require(rail.lockupFixed >= 0, "rail lockupFixed must be non-negative");
-        require(payer.lockupCurrent >= 0, "payer lockupCurrent must be non-negative");
         require(payer.lockupCurrent <= payer.funds, "payer lockup cannot exceed funds");
-
-        return 0;
     }
 
     function processOneTimePayment(
@@ -357,18 +345,27 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
         uint256 newRate,
         uint256 oneTimePayment
     ) internal {
-        require(oneTimePayment <= rail.lockupFixed, "one-time payment exceeds rail fixed lockup");
+        // Ensure the one-time payment does not exceed the available fixed lockup on the rail.
+        require(
+            oneTimePayment <= rail.lockupFixed,
+            "one-time payment exceeds rail fixed lockup"
+        );
 
-        uint256 oldLockup = (oldRate * rail.lockupPeriod) + rail.lockupFixed;
-        uint256 newLockup = (newRate * rail.lockupPeriod) + (rail.lockupFixed - oneTimePayment);
+        // Calculate the original total lockup amount:
+        uint256 oldTotalLockup = (oldRate * rail.lockupPeriod) + rail.lockupFixed;
+        uint256 newTotalLockup = (newRate * rail.lockupPeriod) + rail.lockupFixed;
 
-        // Check that new total lockup + one time payment is within allowance
-        require(newLockup + oneTimePayment <= oldLockup + approval.lockupAllowance, "exceeds operator lockup allowance");
-        // Adjust the operator's available lockup allowance.
-        approval.lockupAllowance = approval.lockupAllowance + oldLockup - (newLockup + oneTimePayment);
-        require(newRate <= approval.rateAllowance, "new rate exceeds operator rate allowance");
+        require(
+            newTotalLockup <= oldTotalLockup + approval.lockupAllowance,
+            "exceeds operator lockup allowance"
+        );
+
+        approval.lockupAllowance = approval.lockupAllowance + oldTotalLockup - newTotalLockup;
+
+        require(newRate <= oldRate + approval.rateAllowance, "new rate exceeds operator rate allowance");
+        approval.rateAllowance = approval.rateAllowance + oldRate - newRate;
+        
     }
-
 
     function updateRailArbiter(uint256 railId, address newArbiter) external validateRailActive(railId) onlyRailOperator(railId) {
         Rail storage rail = rails[railId];
@@ -380,7 +377,6 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
         // Update the arbiter
         rail.arbiter = newArbiter;
     }
-
 
     function settleRail(uint256 railId, uint256 untilEpoch)
         public
