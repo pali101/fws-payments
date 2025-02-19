@@ -528,7 +528,7 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
             totalSettled += segmentAmount;
             currentEpoch = segmentSettledEpoch;
             rateQueue.dequeue();
-            }
+        }
 
 
         finalEpoch = currentEpoch;
