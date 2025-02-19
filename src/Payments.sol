@@ -13,7 +13,7 @@ interface IArbiter {
     struct ArbitrationResult {
         bool approved;
         uint256 modifiedAmount;
-        uint256 settledUpTo;
+        uint256 settleUpto;
         string note;
     }
 
@@ -468,13 +468,13 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
             );
             require(arbResult.approved, "arbitrer refused payment");
 
-            require(arbResult.settledUpTo <= segmentEnd, "failed to settle: arbiter settled beyond segment end");
+            require(arbResult.settleUpto <= segmentEnd, "failed to settle: arbiter settled beyond segment end");
             require(
-                arbResult.modifiedAmount <= rate * (arbResult.settledUpTo - segmentStart),
+                arbResult.modifiedAmount <= rate * (arbResult.settleUpto - segmentStart),
                 "failed to settle: arbiter modified amount exceeds maximum for settled duration"
             );
             // Do not settle past the segment end.
-            settledUntil = arbResult.settledUpTo;
+            settledUntil = arbResult.settleUpto;
             settledAmount = arbResult.modifiedAmount;
             note = arbResult.note;
         }
