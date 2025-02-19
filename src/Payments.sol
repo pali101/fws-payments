@@ -13,7 +13,7 @@ interface IArbiter {
     struct ArbitrationResult {
         bool approved;
         uint256 modifiedAmount;
-        uint256 settledUntil;
+        uint256 settledUpTo;
         string note;
     }
 
@@ -47,7 +47,7 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
         uint256 paymentRate;
         uint256 lockupPeriod;
         uint256 lockupFixed;
-        uint256 lastSettledAt;
+        uint256 settledUpTo;
     }
 
     struct OperatorApproval {
@@ -237,7 +237,7 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
         rail.operator = operator;
         rail.arbiter = arbiter;
         rail.isActive = true;
-        rail.lastSettledAt = block.number;
+        rail.settledUpTo = block.number;
 
         clientOperatorRails[from][operator].push(railId);
         return railId;
@@ -403,7 +403,7 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
         uint256 settlementTargetEpoch = min(untilEpoch, payer.lockupLastSettledAt + rail.lockupPeriod);
 
         // Begin settlement from the last settled epoch.
-        uint256 currentSettlementEpoch = rail.lastSettledAt;
+        uint256 currentSettlementEpoch = rail.settledUpTo;
         uint256 currentRate = rail.paymentRate;
         totalSettledAmount = 0;
 
@@ -438,7 +438,7 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
         payer.lockupCurrent -= totalSettledAmount;
 
         // Record the new settlement epoch on the rail.
-        rail.lastSettledAt = finalSettledEpoch;
+        rail.settledUpTo = finalSettledEpoch;
 
         require(payer.lockupCurrent <= payer.funds, "insufficient funds");
 
@@ -468,13 +468,13 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
             );
             require(arbResult.approved, "arbitrer refused payment");
 
-            require(arbResult.settledUntil <= segmentEnd, "failed to settle: arbiter settled beyond segment end");
+            require(arbResult.settledUpTo <= segmentEnd, "failed to settle: arbiter settled beyond segment end");
             require(
-                arbResult.modifiedAmount <= rate * (arbResult.settledUntil - segmentStart),
+                arbResult.modifiedAmount <= rate * (arbResult.settledUpTo - segmentStart),
                 "failed to settle: arbiter modified amount exceeds maximum for settled duration"
             );
             // Do not settle past the segment end.
-            settledUntil = arbResult.settledUntil;
+            settledUntil = arbResult.settledUpTo;
             settledAmount = arbResult.modifiedAmount;
             note = arbResult.note;
         }
@@ -535,12 +535,11 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
         return (totalSettled, finalEpoch, "");
     }
 
-    /// @notice Returns the minimum of two numbers.
     function min(uint256 a, uint256 b) public pure returns (uint256) {
         return a < b ? a : b;
     }
 
-    function settleAccountLockup(Account storage account) internal returns (bool, uint256) {
+    function settleAccountLockup(Account storage account) internal returns (bool fullySettled, uint256 settledUpto) {
         uint256 currentEpoch = block.number;
         uint256 elapsedTime = currentEpoch - account.lockupLastSettledAt;
 
@@ -568,16 +567,14 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
                 return (false, account.lockupLastSettledAt);
             }
 
-            uint256 fractionalEpochs = availableFunds / account.lockupRate;
-
             // Round down to the nearest whole epoch
-            uint256 settleEpoch = account.lockupLastSettledAt + fractionalEpochs;
+            uint256 fractionalEpochs = availableFunds / account.lockupRate;
+            settledUpto = account.lockupLastSettledAt + fractionalEpochs;
 
             // Apply lockup up to this point
             account.lockupCurrent += account.lockupRate * fractionalEpochs;
-            account.lockupLastSettledAt = settleEpoch;
-
-            return (false, settleEpoch);
+            account.lockupLastSettledAt = settledUpto;
+            return (false, settledUpto);
         }
     }
 }

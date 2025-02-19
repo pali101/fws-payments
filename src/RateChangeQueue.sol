@@ -2,7 +2,6 @@
 pragma solidity ^0.8.20;
 
 library RateChangeQueue {
-
     struct RateChange {
         uint256 rate;
         uint256 untilEpoch;
