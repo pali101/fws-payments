@@ -14,6 +14,7 @@ interface IArbiter {
         bool approved;
         uint256 modifiedAmount;
         uint256 settledUntil;
+        string note;
     }
 
     function arbitratePayment(
@@ -311,7 +312,7 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
         // --- Settlement Prior to Rate Change ---
         // If there is no arbiter, settle the rail immediately.
         if (rail.arbiter == address(0)) {
-            (, uint256 settledUntil) = settleRail(railId, block.number);
+            (, uint256 settledUntil, ) = settleRail(railId, block.number);
             require(settledUntil == block.number, "not able to settle rail at current epoch");
         } else {
             railRateChangeQueues[railId].enqueue(rail.paymentRate, block.number);
@@ -387,7 +388,8 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
         validateRailAccountsExist(railId)
         returns (
             uint256 totalSettledAmount,
-            uint256 finalSettledEpoch
+            uint256 finalSettledEpoch,
+            string memory note
         )
     {
         // Get the rail and the involved accounts.
@@ -409,7 +411,7 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
 
         // If there are no queued rate changes, settle the entire segment in one shot.
         if (rateQueue.isEmpty()) {
-            (totalSettledAmount, finalSettledEpoch) = _settleSegment(
+            (totalSettledAmount, finalSettledEpoch, note) = _settleSegment(
                 railId,
                 rail,
                 currentSettlementEpoch,
@@ -418,7 +420,7 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
             );
         } else {
             // Otherwise, settle the rail in segments (each up to the next rate–change boundary).
-            (totalSettledAmount, finalSettledEpoch) = _settleWithRateChanges(
+            (totalSettledAmount, finalSettledEpoch, note) = _settleWithRateChanges(
                 railId,
                 rail,
                 rateQueue,
@@ -439,7 +441,7 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
 
         require(payer.lockupCurrent <= payer.funds, "insufficient funds");
 
-        return (totalSettledAmount, finalSettledEpoch);
+        return (totalSettledAmount, finalSettledEpoch, note);
     }
 
     function _settleSegment(
@@ -448,7 +450,7 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
         uint256 segmentStart,
         uint256 segmentEnd,
         uint256 rate
-    ) internal returns (uint256 settledAmount, uint256 settledUntil) {
+    ) internal returns (uint256 settledAmount, uint256 settledUntil, string memory note) {
         // Calculate the intended payment for the entire segment.
         uint256 duration = segmentEnd - segmentStart;
         settledAmount = rate * duration;
@@ -467,13 +469,15 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
             // Do not settle past the segment end.
             settledUntil = arbResult.settledUntil;
             settledAmount = arbResult.modifiedAmount;
+            note = arbResult.note;
         }
 
         // If no progress is made, revert.
         require(settledUntil > segmentStart, "no progress made in settlement");
 
-        return (settledAmount, settledUntil);
+        return (settledAmount, settledUntil, note);
     }
+
     function _settleWithRateChanges(
         uint256 railId,
         Rail storage rail,
@@ -481,7 +485,7 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
         uint256 currentRate,
         uint256 startEpoch,
         uint256 targetEpoch
-    ) internal returns (uint256 totalSettled, uint256 finalEpoch) {
+    ) internal returns (uint256 totalSettled, uint256 finalEpoch, string memory note) {
         totalSettled = 0;
         uint256 currentEpoch = startEpoch;
 
@@ -498,7 +502,7 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
             }
 
             // Settle the segment from currentEpoch up to nextBoundary.
-            (uint256 segmentAmount, uint256 segmentSettledEpoch) = _settleSegment(
+            (uint256 segmentAmount, uint256 segmentSettledEpoch, string memory tempNote) = _settleSegment(
                 railId,
                 rail,
                 currentEpoch,
@@ -511,7 +515,7 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
 
             // Short circuit and return if _settleSegment returns an epoch less than what we sent it
             if (segmentSettledEpoch < nextBoundary) {
-                return (totalSettled + segmentAmount, segmentSettledEpoch);
+                return (totalSettled + segmentAmount, segmentSettledEpoch, tempNote);
             }
 
             totalSettled += segmentAmount;
@@ -521,7 +525,7 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
 
 
         finalEpoch = currentEpoch;
-        return (totalSettled, finalEpoch);
+        return (totalSettled, finalEpoch, "");
     }
 
     /// @notice Returns the minimum of two numbers.
