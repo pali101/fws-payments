@@ -255,9 +255,9 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
         OperatorApproval storage approval = operatorApprovals[rail.token][rail.from][rail.operator];
         require(approval.isApproved, "operator not approved");
 
-        // settle account lockup and if account is not funded upto to the current epoch; revert
-        (bool funded, uint256 settleEpoch) = settleAccountLockup(payer);
-        require(funded && settleEpoch == block.number, "cannot modify lockup as client does not have enough funds for current settlement");
+        // settle account lockup and if account lockup is not settled upto to the current epoch; revert
+        (bool fullySettled, uint256 lockupSettledUpto) = settleAccountLockup(payer);
+        require(fullySettled && lockupSettledUpto == block.number, "cannot modify lockup as client does not have enough funds for current account lockup");
 
         // Calculate the change in base lockup
         uint256 oldLockup = rail.lockupFixed + (rail.paymentRate * rail.lockupPeriod);
@@ -268,14 +268,14 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
         approval.lockupAllowance = approval.lockupAllowance + oldLockup - newLockup;
 
         // Update payer's lockup
-        require(payer.lockupCurrent >= oldLockup, "payer lockup lockup_current cannot be less than old lockup");
+        require(payer.lockupCurrent >= oldLockup, "payer's current lockup cannot be less than old lockup");
         payer.lockupCurrent = payer.lockupCurrent - oldLockup + newLockup;
 
         // Update rail lockup parameters
         rail.lockupPeriod = period;
         rail.lockupFixed = lockupFixed;
 
-        require(payer.lockupCurrent <= payer.funds, "payer lockup_current cannot be greater than funds");
+        require(payer.lockupCurrent <= payer.funds, "payer's current lockup cannot be greater than their funds");
     }
 
     function modifyRailPayment(
