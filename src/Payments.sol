@@ -244,19 +244,17 @@ contract Payments is
             approval.lockupAllowance = 0;
         }
 
+        // Create to account if it doesn't exist
         Account storage toAccount = accounts[token][to];
-        require(
-            toAccount.ownerAddress != address(0),
-            "to account does not exist"
-        );
-        require(toAccount.funds > 0, "to account has no funds");
+        if (toAccount.ownerAddress == address(0)) {
+            toAccount.ownerAddress = to;
+        }
 
+        // Create from account if it doesn't exist
         Account storage fromAccount = accounts[token][from];
-        require(
-            fromAccount.ownerAddress != address(0),
-            "from account does not exist"
-        );
-        require(fromAccount.funds > 0, "from account has no funds");
+        if (fromAccount.ownerAddress == address(0)) {
+            fromAccount.ownerAddress = from;
+        }
 
         uint256 railId = _nextRailId++;
 
