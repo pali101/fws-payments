@@ -467,19 +467,6 @@ contract Payments is
         approval.rateAllowance = approval.rateAllowance + oldRate - newRate;
     }
 
-    function updateRailArbiter(
-        uint256 railId,
-        address newArbiter
-    ) external validateRailActive(railId) onlyRailOperator(railId) {
-        Rail storage rail = rails[railId];
-        OperatorApproval storage approval = operatorApprovals[rail.token][
-            rail.from
-        ][rail.operator];
-        require(approval.isApproved, "operator not approved");
-        // Update the arbiter
-        rail.arbiter = newArbiter;
-    }
-
     function settleRail(
         uint256 railId,
         uint256 untilEpoch
