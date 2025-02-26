@@ -52,6 +52,7 @@ contract Payments is
         uint256 lockupPeriod;
         uint256 lockupFixed;
         uint256 settledUpTo;
+        RateChangeQueue.Queue rateChangeQueue;
     }
 
     struct OperatorApproval {
@@ -60,9 +61,6 @@ contract Payments is
         uint256 lockupAllowance;
     }
 
-    // railId => RateChangeQueue
-    mapping(uint256 => RateChangeQueue.Queue) public railRateChangeQueues;
-
     // Counter for generating unique rail IDs
     uint256 private _nextRailId;
 
@@ -70,7 +68,7 @@ contract Payments is
     mapping(address => mapping(address => Account)) public accounts;
 
     // railId => Rail
-    mapping(uint256 => Rail) public rails;
+    mapping(uint256 => Rail) internal rails;
 
     // token => client => operator => Approval
     mapping(address => mapping(address => mapping(address => OperatorApproval)))
@@ -385,10 +383,7 @@ contract Payments is
                 "not able to settle rail upto current epoch"
             );
         } else {
-            railRateChangeQueues[railId].enqueue(
-                rail.paymentRate,
-                block.number
-            );
+            rail.rateChangeQueue.enqueue(rail.paymentRate, block.number);
         }
 
         require(
@@ -523,7 +518,7 @@ contract Payments is
         uint256 currentPaymentRate = paymentRail.paymentRate;
 
         // Retrieve any queued rate changes for this rail.
-        RateChangeQueue.Queue storage rateQueue = railRateChangeQueues[railId];
+        RateChangeQueue.Queue storage rateQueue = paymentRail.rateChangeQueue;
 
         // If no rate changes are queued, settle the entire segment from lastSettledEpoch to maxSettlementEpoch.
         if (rateQueue.isEmpty()) {
