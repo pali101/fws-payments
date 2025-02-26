@@ -485,132 +485,89 @@ contract Payments is
             "failed to settle: cannot settle future epochs"
         );
 
-        Rail storage paymentRail = rails[railId];
-        Account storage payer = accounts[paymentRail.token][paymentRail.from];
-        Account storage payee = accounts[paymentRail.token][paymentRail.to];
+        Rail storage rail = rails[railId];
+        Account storage payer = accounts[rail.token][rail.from];
+        Account storage payee = accounts[rail.token][rail.to];
 
+        // Update the payer's lockup to account for elapsed time
         settleAccountLockup(payer);
 
-        // Determine the maximum allowed epoch we can settle to based on the payer's lockupPeriod.
         uint256 maxSettlementEpoch = min(
             untilEpoch,
-            payer.lockupLastSettledAt + paymentRail.lockupPeriod
+            payer.lockupLastSettledAt + rail.lockupPeriod
         );
 
-        // Begin from the last epoch that was actually settled.
-        uint256 lastSettledEpoch = paymentRail.settledUpTo;
-        uint256 currentPaymentRate = paymentRail.paymentRate;
+        uint256 startEpoch = rail.settledUpTo;
+        uint256 currentRate = rail.paymentRate;
 
-        // Check if we're trying to settle an already settled period or a zero-duration period
-        if (lastSettledEpoch >= maxSettlementEpoch) {
-            // Nothing to settle, return early with zero values
-            return (0, lastSettledEpoch, "");
+        // nothing to settle (already settled or zero-duration)
+        if (startEpoch >= maxSettlementEpoch) {
+            return (0, startEpoch, "already settled upto requested epoch");
         }
 
-        // Early return if the rate is zero - we can immediately advance the settlement epoch
-        // without transferring any funds
-        if (currentPaymentRate == 0 && paymentRail.rateChangeQueue.isEmpty()) {
-            paymentRail.settledUpTo = maxSettlementEpoch;
-            return (0, maxSettlementEpoch, "Zero rate payment rail");
+        // for zero rate rails with empty queue, just advance the settlement epoch
+        // without transferring funds
+        if (currentRate == 0 && rail.rateChangeQueue.isEmpty()) {
+            rail.settledUpTo = maxSettlementEpoch;
+            return (0, maxSettlementEpoch, "zero rate payment rail");
         }
 
-        // Retrieve any queued rate changes for this rail.
-        RateChangeQueue.Queue storage rateQueue = paymentRail.rateChangeQueue;
-
-        // If no rate changes are queued, settle the entire segment from lastSettledEpoch to maxSettlementEpoch.
-        if (rateQueue.isEmpty()) {
+        // Process settlement depending on whether rate changes exist
+        if (rail.rateChangeQueue.isEmpty()) {
+            // Simple case: No rate changes, settle at current rate
             (totalSettledAmount, finalSettledEpoch, note) = _settleSegment(
                 railId,
-                paymentRail,
-                lastSettledEpoch,
+                rail,
+                startEpoch,
                 maxSettlementEpoch,
-                currentPaymentRate
+                currentRate
             );
         } else {
-            // Otherwise, handle each segment up to the next rate–change boundary.
+            // Complex case: Handle multiple rate changes within the settlement period
             (
                 totalSettledAmount,
                 finalSettledEpoch,
                 note
             ) = _settleWithRateChanges(
                 railId,
-                paymentRail,
-                rateQueue,
-                currentPaymentRate,
-                lastSettledEpoch,
+                rail,
+                rail.rateChangeQueue,
+                currentRate,
+                startEpoch,
                 maxSettlementEpoch
             );
         }
 
-        // Check and reduce the payer's funds and lockup after we know how much is settled.
-        //
+        // Verify payer has sufficient funds for the settlement
         require(
             payer.funds >= totalSettledAmount,
             "failed to settle: insufficient funds to cover settlement"
         );
 
+        // Verify payer has sufficient lockup for the settlement
+        // This should always be true if lockup accounting is correct
         require(
             payer.lockupCurrent >= totalSettledAmount,
             "failed to settle: insufficient lockup to cover settlement"
         );
+
+        // Transfer funds from payer to payee
         payer.funds -= totalSettledAmount;
         payee.funds += totalSettledAmount;
+
+        // Reduce the lockup by the settled amount
         payer.lockupCurrent -= totalSettledAmount;
 
-        // Update the final settled epoch on the rail record.
-        paymentRail.settledUpTo = finalSettledEpoch;
+        // Update the rail's settled epoch
+        rail.settledUpTo = finalSettledEpoch;
 
-        // Sanity check: the lockup should never exceed total funds.
+        // Invariant check: lockup should never exceed funds
         require(
             payer.lockupCurrent <= payer.funds,
             "failed to settle: insufficient funds to cover lockup after settlement"
         );
 
         return (totalSettledAmount, finalSettledEpoch, note);
-    }
-
-    function _settleSegment(
-        uint256 railId,
-        Rail storage rail,
-        uint256 epochStart,
-        uint256 epochEnd,
-        uint256 rate
-    )
-        internal
-        returns (
-            uint256 settledAmount,
-            uint256 settledUntil,
-            string memory note
-        )
-    {
-        // Calculate the intended settlement amount for the time span.
-        uint256 duration = epochEnd - epochStart;
-        settledAmount = rate * duration;
-        settledUntil = epochEnd;
-
-        // If the rail has an assigned arbiter, call it for arbitration on this segment.
-        if (rail.arbiter != address(0)) {
-            IArbiter arbiter = IArbiter(rail.arbiter);
-            IArbiter.ArbitrationResult memory arbResult = arbiter
-                .arbitratePayment(railId, settledAmount, epochStart, epochEnd);
-
-            require(
-                arbResult.settleUpto <= epochEnd,
-                "failed to settle: arbiter settled beyond segment end"
-            );
-            require(
-                arbResult.modifiedAmount <=
-                    rate * (arbResult.settleUpto - epochStart),
-                "failed to settle: arbiter modified amount exceeds maximum for settled duration"
-            );
-
-            // Adjust the amount and the final epoch according to the arbiter's decision.
-            settledUntil = arbResult.settleUpto;
-            settledAmount = arbResult.modifiedAmount;
-            note = arbResult.note;
-        }
-
-        return (settledAmount, settledUntil, note);
     }
 
     function _settleWithRateChanges(
@@ -625,73 +582,139 @@ contract Payments is
         returns (uint256 totalSettled, uint256 finalEpoch, string memory note)
     {
         totalSettled = 0;
-        uint256 currentEpoch = startEpoch;
-        uint256 activeRate = currentRate;
+        uint256 processedEpoch = startEpoch;
         note = "";
 
-        while (currentEpoch < targetEpoch) {
-            uint256 nextBoundary = targetEpoch;
+        // Process each segment until we reach the target epoch or hit an early exit condition
+        while (processedEpoch < targetEpoch) {
+            // Default boundary is the target we want to reach
+            uint256 segmentEndBoundary = targetEpoch;
+            uint256 segmentRate;
 
-            // If there's an upcoming rate change, check if it applies within our current range.
+            // If we have rate changes in the queue, use the rate from the next change
             if (!rateQueue.isEmpty()) {
-                RateChangeQueue.RateChange memory upcomingChange = rateQueue
+                RateChangeQueue.RateChange memory nextRateChange = rateQueue
                     .peek();
-                bool isWithinRange = (upcomingChange.untilEpoch >=
-                    currentEpoch);
-                require(isWithinRange, "rate queue is in an invalid state");
 
-                nextBoundary = min(nextBoundary, upcomingChange.untilEpoch);
-                activeRate = upcomingChange.rate;
+                // Validate rate change queue consistency
+                require(
+                    nextRateChange.untilEpoch >= processedEpoch,
+                    "rate queue is in an invalid state"
+                );
+
+                // Boundary is the minimum of our target or the next rate change epoch
+                segmentEndBoundary = min(
+                    targetEpoch,
+                    nextRateChange.untilEpoch
+                );
+                segmentRate = nextRateChange.rate;
             } else {
-                // Reset to current rate if queue is empty
-                activeRate = currentRate;
+                // If queue is empty, use the current rail rate
+                segmentRate = currentRate;
 
-                // Short circuit if the rate is zero and queue is now empty
-                if (activeRate == 0) {
-                    finalEpoch = targetEpoch;
-                    return (totalSettled, finalEpoch, "Zero rate payment rail");
+                // if current rate is zero, there's nothing left to do and we've finished settlement
+                if (segmentRate == 0) {
+                    return (
+                        totalSettled,
+                        targetEpoch,
+                        "Zero rate payment rail"
+                    );
                 }
             }
 
-            // Settle the segment from the current epoch up to the next boundary (or early if arbitration says so).
+            // Settle the current segment with potentially arbitrated outcomes
             (
                 uint256 segmentAmount,
-                uint256 segmentEndEpoch,
-                string memory arbNote
+                uint256 settledUntilEpoch,
+                string memory arbitrationNote
             ) = _settleSegment(
                     railId,
                     rail,
-                    currentEpoch,
-                    nextBoundary,
-                    activeRate
+                    processedEpoch,
+                    segmentEndBoundary,
+                    segmentRate
                 );
 
-            // no progress was made    -> short circuit
-            if (segmentEndEpoch <= currentEpoch) {
-                return (totalSettled, segmentEndEpoch, arbNote);
+            // If arbiter returned no progress, exit early
+            // This could happen if arbiter rejects the settlement entirely
+            if (settledUntilEpoch <= processedEpoch) {
+                return (totalSettled, settledUntilEpoch, arbitrationNote);
             }
 
-            // Update the total settled.
+            // Add the settled amount to our running total
             totalSettled += segmentAmount;
 
-            // If the arbitration shortened the segment, stop and return immediately.
-            // but keep the rate change in the queue as we've not fully settled the segment.
-            if (segmentEndEpoch < nextBoundary) {
-                return (totalSettled, segmentEndEpoch, arbNote);
+            // If arbiter partially settled the segment, exit early
+            // but keep the rate change in the queue for next settlement attempt as we've not settled the entire segment
+            if (settledUntilEpoch < segmentEndBoundary) {
+                return (totalSettled, settledUntilEpoch, arbitrationNote);
             }
 
-            // Otherwise, we have fully settled up to nextBoundary.
-            currentEpoch = segmentEndEpoch;
-            note = arbNote;
+            // Successfully settled full segment, update tracking values
+            processedEpoch = settledUntilEpoch;
+            note = arbitrationNote;
 
+            // Remove the processed rate change from the queue
             if (!rateQueue.isEmpty()) {
                 rateQueue.dequeue();
             }
         }
 
-        // If we reach here, we've settled up to our target epoch.
-        finalEpoch = currentEpoch;
-        return (totalSettled, finalEpoch, note);
+        // We've successfully settled up to the target epoch
+        return (totalSettled, processedEpoch, note);
+    }
+
+    function _settleSegment(
+        uint256 railId,
+        Rail storage rail,
+        uint256 epochStart,
+        uint256 epochEnd,
+        uint256 rate
+    )
+        internal
+        returns (
+            uint256 settledAmount,
+            uint256 settledUntilEpoch,
+            string memory note
+        )
+    {
+        // Calculate the default settlement values (without arbitration)
+        uint256 duration = epochEnd - epochStart;
+        settledAmount = rate * duration;
+        settledUntilEpoch = epochEnd;
+        note = "";
+
+        // If this rail has an arbiter, let it decide on the final settlement amount
+        if (rail.arbiter != address(0)) {
+            IArbiter arbiter = IArbiter(rail.arbiter);
+            IArbiter.ArbitrationResult memory result = arbiter.arbitratePayment(
+                railId,
+                settledAmount,
+                epochStart,
+                epochEnd
+            );
+
+            // Ensure arbiter doesn't settle beyond our segment's end boundary
+            require(
+                result.settleUpto <= epochEnd,
+                "arbiter settled beyond segment end"
+            );
+
+            // Ensure arbiter doesn't allow more payment than the maximum possible
+            // for the epochs they're confirming
+            uint256 maxAllowedAmount = rate * (result.settleUpto - epochStart);
+            require(
+                result.modifiedAmount <= maxAllowedAmount,
+                "arbiter modified amount exceeds maximum for settled duration"
+            );
+
+            // Update values based on arbiter's decision
+            settledUntilEpoch = result.settleUpto;
+            settledAmount = result.modifiedAmount;
+            note = result.note;
+        }
+
+        return (settledAmount, settledUntilEpoch, note);
     }
 
     function min(uint256 a, uint256 b) public pure returns (uint256) {
