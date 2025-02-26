@@ -648,6 +648,9 @@ contract Payments is
 
                 nextBoundary = min(nextBoundary, upcomingChange.untilEpoch);
                 activeRate = upcomingChange.rate;
+            } else {
+                // Reset to current rate if queue is empty
+                activeRate = currentRate;
             }
 
             // Settle the segment from the current epoch up to the next boundary (or early if arbitration says so).
@@ -676,7 +679,9 @@ contract Payments is
             currentEpoch = segmentEndEpoch;
             note = arbNote;
 
-            rateQueue.dequeue();
+            if (!rateQueue.isEmpty()) {
+                rateQueue.dequeue();
+            }
         }
 
         // If we reach here, we've settled up to our target epoch.
