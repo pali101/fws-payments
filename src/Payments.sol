@@ -610,12 +610,6 @@ contract Payments is
             note = arbResult.note;
         }
 
-        // Revert if no progress was made (i.e., the final epoch did not advance).
-        require(
-            settledUntil > epochStart,
-            "failed to settle: no progress made in settlement"
-        );
-
         return (settledAmount, settledUntil, note);
     }
 
@@ -671,6 +665,11 @@ contract Payments is
                     nextBoundary,
                     activeRate
                 );
+
+            // no progress was made    -> short circuit
+            if (segmentEndEpoch <= currentEpoch) {
+                return (totalSettled, segmentEndEpoch, arbNote);
+            }
 
             // Update the total settled.
             totalSettled += segmentAmount;
