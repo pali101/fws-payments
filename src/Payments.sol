@@ -514,6 +514,12 @@ contract Payments is
         uint256 lastSettledEpoch = paymentRail.settledUpTo;
         uint256 currentPaymentRate = paymentRail.paymentRate;
 
+        // Check if we're trying to settle an already settled period or a zero-duration period
+        if (lastSettledEpoch >= maxSettlementEpoch) {
+            // Nothing to settle, return early with zero values
+            return (0, lastSettledEpoch, "");
+        }
+
         // Retrieve any queued rate changes for this rail.
         RateChangeQueue.Queue storage rateQueue = paymentRail.rateChangeQueue;
 
