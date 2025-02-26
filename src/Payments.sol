@@ -56,7 +56,6 @@ contract Payments is
 
     struct OperatorApproval {
         bool isApproved;
-        address arbitrer;
         uint256 rateAllowance;
         uint256 lockupAllowance;
     }
@@ -133,7 +132,6 @@ contract Payments is
     function approveOperator(
         address token,
         address operator,
-        address arbiter,
         uint256 rateAllowance,
         uint256 lockupAllowance
     ) external onlyAccountOwner(token) {
@@ -143,7 +141,6 @@ contract Payments is
         OperatorApproval storage approval = operatorApprovals[token][
             msg.sender
         ][operator];
-        approval.arbitrer = arbiter;
         approval.rateAllowance = rateAllowance;
         approval.lockupAllowance = lockupAllowance;
         approval.isApproved = true;
@@ -240,10 +237,15 @@ contract Payments is
         require(to != address(0), "to address cannot be zero");
         require(operator != address(0), "operator address cannot be zero");
 
-        OperatorApproval memory approval = operatorApprovals[token][from][
+        // Check if operator is approved, if not, auto-approve with zero allowances
+        OperatorApproval storage approval = operatorApprovals[token][from][
             operator
         ];
-        require(approval.isApproved, "operator not approved");
+        if (!approval.isApproved) {
+            approval.isApproved = true;
+            approval.rateAllowance = 0;
+            approval.lockupAllowance = 0;
+        }
 
         Account storage toAccount = accounts[token][to];
         require(
@@ -258,10 +260,6 @@ contract Payments is
             "from account does not exist"
         );
         require(fromAccount.funds > 0, "from account has no funds");
-
-        if (approval.arbitrer != address(0)) {
-            require(arbiter == approval.arbitrer, "arbiter mismatch");
-        }
 
         uint256 railId = _nextRailId++;
 
@@ -486,9 +484,6 @@ contract Payments is
             rail.from
         ][rail.operator];
         require(approval.isApproved, "operator not approved");
-        if (approval.arbitrer != address(0)) {
-            require(newArbiter == approval.arbitrer, "arbiter mismatch");
-        }
         // Update the arbiter
         rail.arbiter = newArbiter;
     }
