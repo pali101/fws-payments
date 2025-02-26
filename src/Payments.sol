@@ -520,6 +520,13 @@ contract Payments is
             return (0, lastSettledEpoch, "");
         }
 
+        // Early return if the rate is zero - we can immediately advance the settlement epoch
+        // without transferring any funds
+        if (currentPaymentRate == 0 && paymentRail.rateChangeQueue.isEmpty()) {
+            paymentRail.settledUpTo = maxSettlementEpoch;
+            return (0, maxSettlementEpoch, "Zero rate payment rail");
+        }
+
         // Retrieve any queued rate changes for this rail.
         RateChangeQueue.Queue storage rateQueue = paymentRail.rateChangeQueue;
 
