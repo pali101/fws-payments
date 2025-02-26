@@ -664,6 +664,12 @@ contract Payments is
             } else {
                 // Reset to current rate if queue is empty
                 activeRate = currentRate;
+
+                // Short circuit if the rate is zero and queue is now empty
+                if (activeRate == 0) {
+                    finalEpoch = targetEpoch;
+                    return (totalSettled, finalEpoch, "Zero rate payment rail");
+                }
             }
 
             // Settle the segment from the current epoch up to the next boundary (or early if arbitration says so).
