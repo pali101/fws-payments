@@ -559,12 +559,12 @@ contract Payments is
         //
         require(
             payer.funds >= totalSettledAmount,
-            "failed to settle: insufficient funds"
+            "failed to settle: insufficient funds to cover settlement"
         );
 
         require(
             payer.lockupCurrent >= totalSettledAmount,
-            "failed to settle: insufficient lockup funds"
+            "failed to settle: insufficient lockup to cover settlement"
         );
         payer.funds -= totalSettledAmount;
         payee.funds += totalSettledAmount;
@@ -576,7 +576,7 @@ contract Payments is
         // Sanity check: the lockup should never exceed total funds.
         require(
             payer.lockupCurrent <= payer.funds,
-            "failed to settle: insufficient funds"
+            "failed to settle: insufficient funds to cover lockup after settlement"
         );
 
         return (totalSettledAmount, finalSettledEpoch, note);
