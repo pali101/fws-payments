@@ -227,13 +227,12 @@ contract Payments is
         address token,
         address from,
         address to,
-        address operator,
         address arbiter
     ) external returns (uint256) {
+        address operator = msg.sender;
         require(token != address(0), "token address cannot be zero");
         require(from != address(0), "from address cannot be zero");
         require(to != address(0), "to address cannot be zero");
-        require(operator != address(0), "operator address cannot be zero");
 
         // Check if operator is approved, if not, auto-approve with zero allowances
         OperatorApproval storage approval = operatorApprovals[token][from][
