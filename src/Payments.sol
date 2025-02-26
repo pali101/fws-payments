@@ -543,6 +543,12 @@ contract Payments is
         }
 
         // Check and reduce the payer's funds and lockup after we know how much is settled.
+        //
+        require(
+            payer.funds >= totalSettledAmount,
+            "failed to settle: insufficient funds"
+        );
+
         require(
             payer.lockupCurrent >= totalSettledAmount,
             "failed to settle: insufficient lockup funds"
@@ -563,19 +569,6 @@ contract Payments is
         return (totalSettledAmount, finalSettledEpoch, note);
     }
 
-    /**
-     * @notice Settles a payment segment for the specified epoch range at the given rate.
-     *         If an arbiter is set, an external arbitration call is made to potentially
-     *         modify the final settlement amount or end epoch.
-     * @param railId The identifier of the rail being settled.
-     * @param rail A storage reference to the rail.
-     * @param epochStart The starting epoch of this settlement segment.
-     * @param epochEnd The ending epoch of this settlement segment.
-     * @param rate The rate for this settlement segment.
-     * @return settledAmount The final amount to settle for this segment.
-     * @return settledUntil The final epoch that effectively got settled.
-     * @return note An optional note returned by the arbitrator.
-     */
     function _settleSegment(
         uint256 railId,
         Rail storage rail,
@@ -630,7 +623,7 @@ contract Payments is
         uint256 railId,
         Rail storage rail,
         RateChangeQueue.Queue storage rateQueue,
-        uint256 initialRate,
+        uint256 currentRate,
         uint256 startEpoch,
         uint256 targetEpoch
     )
@@ -639,10 +632,10 @@ contract Payments is
     {
         totalSettled = 0;
         uint256 currentEpoch = startEpoch;
-        uint256 activeRate = initialRate;
+        uint256 activeRate = currentRate;
         note = "";
 
-        while (currentEpoch <= targetEpoch) {
+        while (currentEpoch < targetEpoch) {
             uint256 nextBoundary = targetEpoch;
 
             // If there's an upcoming rate change, check if it applies within our current range.
@@ -650,10 +643,10 @@ contract Payments is
                 RateChangeQueue.RateChange memory upcomingChange = rateQueue
                     .peek();
                 bool isWithinRange = (upcomingChange.untilEpoch >=
-                    currentEpoch &&
-                    upcomingChange.untilEpoch <= targetEpoch);
+                    currentEpoch);
                 require(isWithinRange, "rate queue is in an invalid state");
-                nextBoundary = upcomingChange.untilEpoch;
+
+                nextBoundary = min(nextBoundary, upcomingChange.untilEpoch);
                 activeRate = upcomingChange.rate;
             }
 
@@ -683,15 +676,7 @@ contract Payments is
             currentEpoch = segmentEndEpoch;
             note = arbNote;
 
-            // Dequeue the rate change we just passed (if it was indeed used this round).
-            if (!rateQueue.isEmpty()) {
-                // Peek again to confirm it's the one we used.
-                RateChangeQueue.RateChange memory frontChange = rateQueue
-                    .peek();
-                if (frontChange.untilEpoch == nextBoundary) {
-                    rateQueue.dequeue();
-                }
-            }
+            rateQueue.dequeue();
         }
 
         // If we reach here, we've settled up to our target epoch.
