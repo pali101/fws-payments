@@ -144,7 +144,6 @@ contract Payments is
         approval.isApproved = true;
     }
 
-    // TODO: Revisit
     function terminateOperator(address operator) external {
         require(operator != address(0), "operator address invalid");
 
@@ -156,25 +155,52 @@ contract Payments is
                 continue;
             }
 
-            settleRail(railIds[i], block.number);
+            // Settle the rail up to the current block
+            (, uint256 settledUntilEpoch, ) = settleRail(
+                railIds[i],
+                block.number
+            );
+            require(
+                settledUntilEpoch == block.number,
+                "Failed to settle rail completely"
+            );
 
             Account storage account = accounts[rail.token][msg.sender];
-            account.lockupCurrent -=
-                rail.lockupFixed +
+
+            uint256 railLockup = rail.lockupFixed +
                 (rail.paymentRate * rail.lockupPeriod);
+            require(
+                account.lockupCurrent >= railLockup,
+                "Lockup accounting error"
+            );
+            account.lockupCurrent -= railLockup;
+
+            // Check to avoid underflow
+            require(
+                account.lockupRate >= rail.paymentRate,
+                "Rate accounting error"
+            );
             account.lockupRate -= rail.paymentRate;
 
+            // Set rail parameters to zero
             rail.paymentRate = 0;
             rail.lockupFixed = 0;
             rail.lockupPeriod = 0;
             rail.isActive = false;
 
+            // Update operator approval
             OperatorApproval storage approval = operatorApprovals[rail.token][
                 msg.sender
             ][operator];
             approval.rateAllowance = 0;
             approval.lockupAllowance = 0;
             approval.isApproved = false;
+
+            // Ensure invariant: lockup should never exceed funds
+            require(
+                account.lockupCurrent <= account.funds,
+                "Lockup exceeds funds after terminating operator"
+            );
         }
     }
 
