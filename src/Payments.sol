@@ -78,6 +78,8 @@ contract Payments is
     mapping(address => mapping(address => uint256[]))
         public clientOperatorRails;
 
+    mapping(uint256 => bool) private _railModificationLocks;
+
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
@@ -96,6 +98,16 @@ contract Payments is
         require(rails[railId].from != address(0), "rail does not exist");
         require(rails[railId].isActive, "rail is inactive");
         _;
+    }
+
+    modifier noRailModificationInProgress(uint256 railId) {
+        require(
+            !_railModificationLocks[railId],
+            "Modification already in progress"
+        );
+        _railModificationLocks[railId] = true;
+        _;
+        _railModificationLocks[railId] = false;
     }
 
     modifier validateRailAccountsExist(uint256 railId) {
@@ -251,7 +263,7 @@ contract Payments is
         address from,
         address to,
         address arbiter
-    ) external returns (uint256) {
+    ) external noRailModificationInProgress(_nextRailId) returns (uint256) {
         address operator = msg.sender;
         require(token != address(0), "token address cannot be zero");
         require(from != address(0), "from address cannot be zero");
@@ -303,6 +315,7 @@ contract Payments is
         validateRailActive(railId)
         validateRailAccountsExist(railId)
         onlyRailOperator(railId)
+        noRailModificationInProgress(railId)
     {
         Rail storage rail = rails[railId];
         Account storage payer = accounts[rail.token][rail.from];
@@ -362,6 +375,7 @@ contract Payments is
         validateRailActive(railId)
         validateRailAccountsExist(railId)
         onlyRailOperator(railId)
+        noRailModificationInProgress(railId)
     {
         Rail storage rail = rails[railId];
         Account storage payer = accounts[rail.token][rail.from];
@@ -497,6 +511,7 @@ contract Payments is
         public
         validateRailActive(railId)
         validateRailAccountsExist(railId)
+        nonReentrant
         returns (
             uint256 totalSettledAmount,
             uint256 finalSettledEpoch,
