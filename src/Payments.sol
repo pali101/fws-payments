@@ -551,23 +551,14 @@ contract Payments is
 
         // Process settlement depending on whether rate changes exist
         if (rail.rateChangeQueue.isEmpty()) {
-            (
-                uint256 amount,
-                uint256 settledUntilEpoch,
-                string memory segmentNote
-            ) = _settleSegment(
-                    railId,
-                    startEpoch,
-                    maxSettlementEpoch,
-                    currentRate
-                );
-
-            // If arbiter returned no progress, exit early without updating rail state
-            require(
-                settledUntilEpoch > startEpoch,
-                "No progress in settlement"
+            (uint256 amount, string memory segmentNote) = _settleSegment(
+                railId,
+                startEpoch,
+                maxSettlementEpoch,
+                currentRate
             );
 
+            require(rail.settledUpTo > startEpoch, "No progress in settlement");
             return (amount, rail.settledUpTo, segmentNote);
         } else {
             return
@@ -637,7 +628,6 @@ contract Payments is
             // Settle the current segment with potentially arbitrated outcomes
             (
                 uint256 segmentAmount,
-                uint256 settledUntilEpoch,
                 string memory arbitrationNote
             ) = _settleSegment(
                     railId,
@@ -647,7 +637,7 @@ contract Payments is
                 );
 
             // If arbiter returned no progress, exit early without updating state
-            if (settledUntilEpoch <= processedEpoch) {
+            if (rail.settledUpTo <= processedEpoch) {
                 return (totalSettled, rail.settledUpTo, arbitrationNote);
             }
 
@@ -655,12 +645,12 @@ contract Payments is
             totalSettled += segmentAmount;
 
             // If arbiter partially settled the segment, exit early
-            if (settledUntilEpoch < segmentEndBoundary) {
+            if (rail.settledUpTo < segmentEndBoundary) {
                 return (totalSettled, rail.settledUpTo, arbitrationNote);
             }
 
             // Successfully settled full segment, update tracking values
-            processedEpoch = settledUntilEpoch;
+            processedEpoch = rail.settledUpTo;
             note = arbitrationNote;
 
             // Remove the processed rate change from the queue
@@ -678,14 +668,7 @@ contract Payments is
         uint256 epochStart,
         uint256 epochEnd,
         uint256 rate
-    )
-        internal
-        returns (
-            uint256 settledAmount,
-            uint256 settledUntilEpoch,
-            string memory note
-        )
-    {
+    ) internal returns (uint256 settledAmount, string memory note) {
         Rail storage rail = rails[railId];
         Account storage payer = accounts[rail.token][rail.from];
         Account storage payee = accounts[rail.token][rail.to];
@@ -693,7 +676,7 @@ contract Payments is
         // Calculate the default settlement values (without arbitration)
         uint256 duration = epochEnd - epochStart;
         settledAmount = rate * duration;
-        settledUntilEpoch = epochEnd;
+        uint256 settledUntilEpoch = epochEnd;
         note = "";
 
         // If this rail has an arbiter, let it decide on the final settlement amount
@@ -718,7 +701,7 @@ contract Payments is
 
             // If arbiter made no progress, return early without updating any state
             if (settledUntilEpoch <= epochStart) {
-                return (0, rail.settledUpTo, note);
+                return (0, note);
             }
 
             // Ensure arbiter doesn't allow more payment than the maximum possible
@@ -758,7 +741,7 @@ contract Payments is
             "failed to settle: insufficient funds to cover lockup after settlement"
         );
 
-        return (settledAmount, settledUntilEpoch, note);
+        return (settledAmount, note);
     }
 
     function min(uint256 a, uint256 b) public pure returns (uint256) {
