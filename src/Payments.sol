@@ -204,9 +204,6 @@ contract Payments is
         }
     }
 
-    // TODO: implement
-    function terminateRail() public {}
-
     function deposit(address token, address to, uint256 amount) external {
         require(token != address(0), "token address cannot be zero");
         require(to != address(0), "to address cannot be zero");
