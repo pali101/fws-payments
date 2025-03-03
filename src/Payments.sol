@@ -53,6 +53,7 @@ contract Payments is
         uint256 lockupFixed;
         uint256 settledUpTo;
         RateChangeQueue.Queue rateChangeQueue;
+        bool isLocked; // Indicates if the rail is currently being modified
     }
 
     struct OperatorApproval {
@@ -78,8 +79,6 @@ contract Payments is
     mapping(address => mapping(address => uint256[]))
         public clientOperatorRails;
 
-    mapping(uint256 => bool) private _railModificationLocks;
-
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
@@ -101,13 +100,10 @@ contract Payments is
     }
 
     modifier noRailModificationInProgress(uint256 railId) {
-        require(
-            !_railModificationLocks[railId],
-            "Modification already in progress"
-        );
-        _railModificationLocks[railId] = true;
+        require(!rails[railId].isLocked, "Modification already in progress");
+        rails[railId].isLocked = true;
         _;
-        _railModificationLocks[railId] = false;
+        rails[railId].isLocked = false;
     }
 
     modifier validateRailAccountsExist(uint256 railId) {
