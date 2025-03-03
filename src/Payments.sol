@@ -196,15 +196,11 @@ contract Payments is
         require(from != address(0), "from address cannot be zero");
         require(to != address(0), "to address cannot be zero");
 
-        // Check if operator is approved, if not, auto-approve with zero allowances
+        // Check if operator is approved
         OperatorApproval storage approval = operatorApprovals[token][from][
             operator
         ];
-        if (!approval.isApproved) {
-            approval.isApproved = true;
-            approval.rateAllowance = 0;
-            approval.lockupAllowance = 0;
-        }
+        require(approval.isApproved, "operator not approved");
 
         uint256 railId = _nextRailId++;
 
