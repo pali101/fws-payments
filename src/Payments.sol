@@ -156,7 +156,11 @@ contract Payments is
     // https://github.com/FilOzone/payments/pull/1/files#r1974415624
     function terminateOperator(address operator) external {}
 
-    function deposit(address token, address to, uint256 amount) external {
+    function deposit(
+        address token,
+        address to,
+        uint256 amount
+    ) external nonReentrant {
         require(token != address(0), "token address cannot be zero");
         require(to != address(0), "to address cannot be zero");
         require(amount > 0, "amount must be greater than 0");
