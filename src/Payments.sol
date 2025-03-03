@@ -602,15 +602,14 @@ contract Payments is
                 result.settleUpto <= epochEnd,
                 "arbiter settled beyond segment end"
             );
+            require(
+                result.settleUpto >= epochStart,
+                "arbiter settled before segment start"
+            );
 
             settledUntilEpoch = result.settleUpto;
             settledAmount = result.modifiedAmount;
             note = result.note;
-
-            // If arbiter made no progress, return early without updating any state
-            if (settledUntilEpoch <= epochStart) {
-                return (0, note);
-            }
 
             // Ensure arbiter doesn't allow more payment than the maximum possible
             // for the epochs they're confirming
