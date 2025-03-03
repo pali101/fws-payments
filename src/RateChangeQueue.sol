@@ -3,7 +3,9 @@ pragma solidity ^0.8.20;
 
 library RateChangeQueue {
     struct RateChange {
+        // The payment rate to apply
         uint256 rate;
+        // The epoch up to and including which this rate will be used to settle a rail
         uint256 untilEpoch;
     }
 
@@ -14,7 +16,11 @@ library RateChangeQueue {
         uint256 tail;
     }
 
-    function enqueue(Queue storage queue, uint256 rate, uint256 untilEpoch) internal {
+    function enqueue(
+        Queue storage queue,
+        uint256 rate,
+        uint256 untilEpoch
+    ) internal {
         queue.changes[queue.tail] = RateChange(rate, untilEpoch);
         queue.tail++;
     }
@@ -27,7 +33,9 @@ library RateChangeQueue {
         return change;
     }
 
-    function peek(Queue storage queue) internal view returns (RateChange memory) {
+    function peek(
+        Queue storage queue
+    ) internal view returns (RateChange memory) {
         require(queue.head < queue.tail, "Queue is empty");
         return queue.changes[queue.head];
     }
