@@ -1,8 +1,0 @@
-#!/bin/bash
-
-# GH Actions foundry setup
-curl -fL https://foundry.paradigm.xyz | bash
-source /home/runner/.bashrc
-ls /home/runner/.config/.foundry/bin
-
-/home/runner/.config/.foundry/bin/foundryup
