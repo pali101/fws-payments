@@ -11,7 +11,7 @@ contract ERC1967ProxyTest is Test {
     address owner = address(0x123);
 
     function setUp() public {
-         // Set owner for testing
+        // Set owner for testing
         vm.startPrank(owner);
         // Deploy implementation contract
         implementation = new Payments();
@@ -36,7 +36,12 @@ contract ERC1967ProxyTest is Test {
 
     function assertImplementationEquals(address checkImpl) public view {
         bytes32 implementationSlot = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
-        assertEq(address(uint160(uint256(vm.load(address(proxy), implementationSlot)))), address(checkImpl));
+        assertEq(
+            address(
+                uint160(uint256(vm.load(address(proxy), implementationSlot)))
+            ),
+            address(checkImpl)
+        );
     }
 
     function testUpgradeImplementation() public {
@@ -53,13 +58,18 @@ contract ERC1967ProxyTest is Test {
         assertEq(proxy.owner(), owner); // Owner is preserved
     }
 
-    function testFailUpgradeFromNonOwner() public {
+    function test_RevertWhen_UpgradeFromNonOwner() public {
         Payments newImplementation = new Payments();
 
         vm.stopPrank();
         vm.startPrank(address(0xdead));
 
-        vm.expectRevert("Ownable: caller is not the owner");
+        vm.expectRevert(
+            abi.encodeWithSignature(
+                "OwnableUnauthorizedAccount(address)",
+                address(0xdead)
+            )
+        );
         proxy.upgradeToAndCall(address(newImplementation), "");
         assertEq(proxy.owner(), owner); // Owner is preserved
     }
@@ -79,7 +89,7 @@ contract ERC1967ProxyTest is Test {
         assertEq(proxy.owner(), newOwner);
     }
 
-    function testFailTransferFromNonOwner() public {
+    function test_RevertWhen_TransferFromNonOwner() public {
         // Switch to non-owner account
         vm.stopPrank();
         vm.startPrank(address(0xdead));
@@ -87,7 +97,12 @@ contract ERC1967ProxyTest is Test {
         address newOwner = address(0x456);
 
         // Attempt transfer should fail
-        vm.expectRevert("Ownable: caller is not the owner");
+        vm.expectRevert(
+            abi.encodeWithSignature(
+                "OwnableUnauthorizedAccount(address)",
+                address(0xdead)
+            )
+        );
         proxy.transferOwnership(newOwner);
 
         // Verify owner unchanged
