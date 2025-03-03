@@ -34,7 +34,6 @@ contract Payments is
     using RateChangeQueue for RateChangeQueue.Queue;
 
     struct Account {
-        address ownerAddress;
         uint256 funds;
         uint256 lockupCurrent;
         uint256 lockupRate;
@@ -106,20 +105,6 @@ contract Payments is
         rails[railId].isLocked = false;
     }
 
-    modifier validateRailAccountsExist(uint256 railId) {
-        Rail storage rail = rails[railId];
-        require(rail.from != address(0), "rail does not exist");
-        require(
-            accounts[rail.token][rail.from].ownerAddress != address(0),
-            "from account does not exist"
-        );
-        require(
-            accounts[rail.token][rail.to].ownerAddress != address(0),
-            "to account does not exist"
-        );
-        _;
-    }
-
     modifier onlyRailOperator(uint256 railId) {
         require(
             rails[railId].operator == msg.sender,
@@ -128,19 +113,12 @@ contract Payments is
         _;
     }
 
-    modifier onlyAccountOwner(address token) {
-        address owner = accounts[token][msg.sender].ownerAddress;
-        require(owner != address(0), "account does not exist");
-        require(owner == msg.sender, "not account owner");
-        _;
-    }
-
     function approveOperator(
         address token,
         address operator,
         uint256 rateAllowance,
         uint256 lockupAllowance
-    ) external onlyAccountOwner(token) {
+    ) external {
         require(token != address(0), "token address cannot be zero");
         require(operator != address(0), "operator address cannot be zero");
 
@@ -167,9 +145,6 @@ contract Payments is
 
         // Create account if it doesn't exist
         Account storage account = accounts[token][to];
-        if (account.ownerAddress == address(0)) {
-            account.ownerAddress = to;
-        }
 
         // Transfer tokens from sender to contract
         IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
@@ -181,10 +156,7 @@ contract Payments is
         settleAccountLockup(account);
     }
 
-    function withdraw(
-        address token,
-        uint256 amount
-    ) external onlyAccountOwner(token) nonReentrant {
+    function withdraw(address token, uint256 amount) external nonReentrant {
         Account storage acct = accounts[token][msg.sender];
 
         (bool funded, uint256 settleEpoch) = settleAccountLockup(acct);
@@ -223,18 +195,6 @@ contract Payments is
             approval.lockupAllowance = 0;
         }
 
-        // Create to account if it doesn't exist
-        Account storage toAccount = accounts[token][to];
-        if (toAccount.ownerAddress == address(0)) {
-            toAccount.ownerAddress = to;
-        }
-
-        // Create from account if it doesn't exist
-        Account storage fromAccount = accounts[token][from];
-        if (fromAccount.ownerAddress == address(0)) {
-            fromAccount.ownerAddress = from;
-        }
-
         uint256 railId = _nextRailId++;
 
         Rail storage rail = rails[railId];
@@ -257,7 +217,6 @@ contract Payments is
     )
         external
         validateRailActive(railId)
-        validateRailAccountsExist(railId)
         onlyRailOperator(railId)
         noRailModificationInProgress(railId)
     {
@@ -317,7 +276,6 @@ contract Payments is
     )
         external
         validateRailActive(railId)
-        validateRailAccountsExist(railId)
         onlyRailOperator(railId)
         noRailModificationInProgress(railId)
     {
@@ -454,7 +412,6 @@ contract Payments is
     )
         public
         validateRailActive(railId)
-        validateRailAccountsExist(railId)
         nonReentrant
         returns (
             uint256 totalSettledAmount,
