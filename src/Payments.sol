@@ -157,6 +157,17 @@ contract Payments is
     }
 
     function withdraw(address token, uint256 amount) external nonReentrant {
+        withdrawTo(token, msg.sender, amount);
+    }
+
+    function withdrawTo(
+        address token,
+        address to,
+        uint256 amount
+    ) public nonReentrant {
+        require(token != address(0), "token address cannot be zero");
+        require(to != address(0), "recipient address cannot be zero");
+
         Account storage acct = accounts[token][msg.sender];
 
         (bool funded, uint256 settleEpoch) = settleAccountLockup(acct);
@@ -171,7 +182,7 @@ contract Payments is
             "insufficient unlocked funds for withdrawal"
         );
         acct.funds -= amount;
-        IERC20(token).safeTransfer(msg.sender, amount);
+        IERC20(token).safeTransfer(to, amount);
     }
 
     function createRail(
