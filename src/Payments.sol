@@ -12,6 +12,8 @@ import "./RateChangeQueue.sol";
 interface IArbiter {
     struct ArbitrationResult {
         uint256 modifiedAmount;
+        // The epoch up to and including which settlement should occur.
+        // This is used to indicate how far the arbitration has settled the payment.
         uint256 settleUpto;
         string note;
     }
@@ -19,7 +21,9 @@ interface IArbiter {
     function arbitratePayment(
         uint256 railId,
         uint256 proposedAmount,
+        // the epoch up to and including which the rail has already been settled
         uint256 fromEpoch,
+        // the epoch up to which arbitration is requested; payment will be arbitrated for (toEpoch - fromEpoch) epochs
         uint256 toEpoch
     ) external returns (ArbitrationResult memory result);
 }
@@ -37,6 +41,7 @@ contract Payments is
         uint256 funds;
         uint256 lockupCurrent;
         uint256 lockupRate;
+        // The epoch up to and including which lockup has been settled for the account
         uint256 lockupLastSettledAt;
     }
 
@@ -50,6 +55,7 @@ contract Payments is
         uint256 paymentRate;
         uint256 lockupPeriod;
         uint256 lockupFixed;
+        // The epoch up to and including which this rail has been settled
         uint256 settledUpTo;
         RateChangeQueue.Queue rateChangeQueue;
         bool isLocked; // Indicates if the rail is currently being modified
@@ -332,6 +338,9 @@ contract Payments is
                 rail.rateChangeQueue.isEmpty() ||
                 rail.rateChangeQueue.peek().untilEpoch != block.number
             ) {
+                // For arbitrated rails, we need to enqueue the old rate.
+                // This ensures that the old rate is applied up to and including the current block.
+                // The new rate will be applicable starting from the next block.
                 rail.rateChangeQueue.enqueue(rail.paymentRate, block.number);
             }
         }
