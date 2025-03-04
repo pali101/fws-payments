@@ -332,10 +332,17 @@ contract Payments is
                 "not able to settle rail upto current epoch"
             );
         } else {
-            // For arbitrated rails, we need to enqueue the old rate.
-            // This ensures that the old rate is applied up to and including the current block.
-            // The new rate will be applicable starting from the next block.
-            rail.rateChangeQueue.enqueue(rail.paymentRate, block.number);
+            // handle multiple rate changes by the operator in a single epoch
+            // by queueuing the previous rate only once
+            if (
+                rail.rateChangeQueue.isEmpty() ||
+                rail.rateChangeQueue.peek().untilEpoch != block.number
+            ) {
+                // For arbitrated rails, we need to enqueue the old rate.
+                // This ensures that the old rate is applied up to and including the current block.
+                // The new rate will be applicable starting from the next block.
+                rail.rateChangeQueue.enqueue(rail.paymentRate, block.number);
+            }
         }
 
         require(
