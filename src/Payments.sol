@@ -309,24 +309,22 @@ contract Payments is
         );
 
         // If we're increasing the rate, we require full account lockup setlement before we can proceed
-        if (newRate > oldRate) {
-            require(
-                fullySettled && lockupSettledUpto == block.number,
-                "account lockup not fully settled; cannot increase rate"
-            );
-        }
+        require(
+            newRate <= oldRate ||
+                (fullySettled && lockupSettledUpto == block.number),
+            "account lockup not fully settled; cannot increase rate"
+        );
 
-        if (newRate != oldRate) {
-            // we just settled the account lockup. If the client is still not able to guaruantee
-            // enough funds to lock up for the rail upto the current epoch, it means that the rail is in "debt"
-            // i.e. the client does not have enough funds to pay for services already taken on this rail.
-            // in this case, we should not allow rate modifications at all.
-            // the client should first deposit enough funds to pay for this "debt".
-            require(
+        // We just settled the account lockup. If the client is still not able to guaruantee
+        // enough funds to lock up for the rail upto and including the current epoch, it means that the rail is in "debt"
+        // i.e. the client does not have enough funds to pay for services already taken on this rail.
+        // In this case, we should not allow rate modifications at all.
+        // The client should first deposit enough funds to pay for this "debt" and then the rate can be changed.
+        require(
+            newRate == oldRate ||
                 block.number < payer.lockupLastSettledAt + rail.lockupPeriod,
-                "rail is in-debt; cannot change rate"
-            );
-        }
+            "rail is in-debt; cannot change rate"
+        );
 
         // --- Operator Approval Checks ---
         validateAndModifyRateChangeApproval(
