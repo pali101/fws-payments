@@ -324,24 +324,31 @@ contract Payments is
         );
 
         // --- Settlement Prior to Rate Change ---
-        // If there is no arbiter, settle the rail immediately.
-        if (rail.arbiter == address(0)) {
-            (, uint256 settledUpto, ) = settleRail(railId, block.number);
-            require(
-                settledUpto == block.number,
-                "not able to settle rail upto current epoch"
-            );
-        } else {
-            // handle multiple rate changes by the operator in a single epoch
-            // by queueuing the previous rate only once
-            if (
-                rail.rateChangeQueue.isEmpty() ||
-                rail.rateChangeQueue.peek().untilEpoch != block.number
-            ) {
-                // For arbitrated rails, we need to enqueue the old rate.
-                // This ensures that the old rate is applied up to and including the current block.
-                // The new rate will be applicable starting from the next block.
-                rail.rateChangeQueue.enqueue(rail.paymentRate, block.number);
+
+        // Only settle and update rate queue if the rate has changed
+        if (newRate != rail.paymentRate) {
+            // If there is no arbiter, settle the rail immediately.
+            if (rail.arbiter == address(0)) {
+                (, uint256 settledUpto, ) = settleRail(railId, block.number);
+                require(
+                    settledUpto == block.number,
+                    "not able to settle rail upto current epoch"
+                );
+            } else {
+                // handle multiple rate changes by the operator in a single epoch
+                // by queueuing the previous rate only once
+                if (
+                    rail.rateChangeQueue.isEmpty() ||
+                    rail.rateChangeQueue.peek().untilEpoch != block.number
+                ) {
+                    // For arbitrated rails, we need to enqueue the old rate.
+                    // This ensures that the old rate is applied up to and including the current block.
+                    // The new rate will be applicable starting from the next block.
+                    rail.rateChangeQueue.enqueue(
+                        rail.paymentRate,
+                        block.number
+                    );
+                }
             }
         }
 
