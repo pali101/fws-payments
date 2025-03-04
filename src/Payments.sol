@@ -301,19 +301,33 @@ contract Payments is
         ][rail.operator];
         require(approval.isApproved, "Operator not approved");
 
-        // Settle the payer's lockup.
-        // If we're changing the rate, we require full settlement.
+        uint256 oldRate = rail.paymentRate;
+
+        // Settle the payer's lockup to account for elapsed time
         (bool fullySettled, uint256 lockupSettledUpto) = settleAccountLockup(
             payer
         );
-        if (newRate != rail.paymentRate) {
+
+        // If we're increasing the rate, we require full account lockup setlement before we can proceed
+        if (newRate > oldRate) {
             require(
                 fullySettled && lockupSettledUpto == block.number,
-                "account lockup not fully settled; cannot change rate"
+                "account lockup not fully settled; cannot increase rate"
             );
         }
 
-        uint256 oldRate = rail.paymentRate;
+        if (newRate != oldRate) {
+            // we just settled the account lockup. If the client is still not able to guaruantee
+            // enough funds to lock up for the rail upto the current epoch, it means that the rail is in "debt"
+            // i.e. the client does not have enough funds to pay for services already taken on this rail.
+            // in this case, we should not allow rate modifications at all.
+            // the client should first deposit enough funds to pay for this "debt".
+            require(
+                block.number < payer.lockupLastSettledAt + rail.lockupPeriod,
+                "rail is in-debt; cannot change rate"
+            );
+        }
+
         // --- Operator Approval Checks ---
         validateAndModifyRateChangeApproval(
             rail,
@@ -324,9 +338,8 @@ contract Payments is
         );
 
         // --- Settlement Prior to Rate Change ---
-
         // Only settle and update rate queue if the rate has changed
-        if (newRate != rail.paymentRate) {
+        if (newRate != oldRate) {
             // If there is no arbiter, settle the rail immediately.
             if (rail.arbiter == address(0)) {
                 (, uint256 settledUpto, ) = settleRail(railId, block.number);
@@ -344,45 +357,70 @@ contract Payments is
                     // For arbitrated rails, we need to enqueue the old rate.
                     // This ensures that the old rate is applied up to and including the current block.
                     // The new rate will be applicable starting from the next block.
-                    rail.rateChangeQueue.enqueue(
-                        rail.paymentRate,
-                        block.number
-                    );
+                    rail.rateChangeQueue.enqueue(oldRate, block.number);
                 }
             }
         }
 
+        // Calculate the effective lockup period (remaining period that hasn't been settled)
+        require(
+            payer.lockupLastSettledAt <= block.number,
+            "lockup settlement epoch cannot be in the future"
+        );
+        uint256 effectiveLockupPeriod = rail.lockupPeriod -
+            (block.number - payer.lockupLastSettledAt);
+
+        // Verify current lockup is sufficient for the old rate component
+        uint256 oldRateLockupNeeded = (oldRate * effectiveLockupPeriod) +
+            oneTimePayment;
+
+        require(
+            payer.lockupCurrent >= oldRateLockupNeeded,
+            "failed to modify rail payment: insufficient current lockup"
+        );
+        // Verify one-time payment doesn't exceed fixed lockup
         require(
             rail.lockupFixed >= oneTimePayment,
             "one time payment cannot be greater than rail lockupFixed"
         );
+
+        // Update the rail fixed lockup and payment rate
         rail.lockupFixed = rail.lockupFixed - oneTimePayment;
         rail.paymentRate = newRate;
 
+        // Update payer's lockup rate
         require(
             payer.lockupRate >= oldRate,
             "payer lockup rate cannot be less than old rate"
         );
         payer.lockupRate = payer.lockupRate - oldRate + newRate;
 
-        require(
-            payer.lockupCurrent >=
-                ((oldRate * rail.lockupPeriod) + oneTimePayment),
-            "failed to modify rail payment: insufficient current lockup"
-        );
+        // Update payer's current lockup with effective lockup period calculation
+        // Remove old rate lockup for the effective period, add new rate lockup for the same period
         payer.lockupCurrent =
             payer.lockupCurrent -
-            (oldRate * rail.lockupPeriod) +
-            (newRate * rail.lockupPeriod) -
+            (oldRate * effectiveLockupPeriod) +
+            (newRate * effectiveLockupPeriod) -
             oneTimePayment;
 
         // --- Process the One-Time Payment ---
         processOneTimePayment(payer, payee, oneTimePayment);
 
+        // Ensure the modified lockup doesn't exceed available funds
         require(
             payer.lockupCurrent <= payer.funds,
             "payer lockup cannot exceed funds"
         );
+
+        // If we've reduced the rate, settle lockup again to account for changes
+        // and ensure that account lockup is settled upto and including the current epoch
+        if (newRate < oldRate) {
+            (bool settled, uint256 settledUpto) = settleAccountLockup(payer);
+            require(
+                settled && settledUpto == block.number,
+                "account lockup must be fully settled after rate decrease"
+            );
+        }
     }
 
     function processOneTimePayment(
