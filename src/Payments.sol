@@ -326,7 +326,14 @@ contract Payments is
                 "not able to settle rail upto current epoch"
             );
         } else {
-            rail.rateChangeQueue.enqueue(rail.paymentRate, block.number);
+            // handle multiple rate changes by the operator in a single epoch
+            // by queueuing the previous rate only once
+            if (
+                rail.rateChangeQueue.isEmpty() ||
+                rail.rateChangeQueue.peek().untilEpoch != block.number
+            ) {
+                rail.rateChangeQueue.enqueue(rail.paymentRate, block.number);
+            }
         }
 
         require(
