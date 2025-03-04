@@ -22,12 +22,14 @@ jobs:
         run: |
           forge install
 
+      - name: Add foundry to the PATH
+        run: |
+          echo "$HOME/.config/.foundry/bin" >> "$GITHUB_PATH"
+
       - name: Run build
         run: |
-          export PATH="/home/runner/.config/.foundry/bin:$PATH";
-          make build;
+          make build
 
       - name: Run tests
         run: |
-          export PATH="/home/runner/.config/.foundry/bin:$PATH";
-          make test;
+          make test
