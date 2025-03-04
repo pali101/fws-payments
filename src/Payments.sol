@@ -223,6 +223,71 @@ contract Payments is
         return railId;
     }
 
+    function terminateRail(
+        uint256 railId
+    ) external validateRailActive(railId) noRailModificationInProgress(railId) {
+        Rail storage rail = rails[railId];
+
+        // Ensure only the payer can terminate the rail
+        require(
+            rail.from == msg.sender,
+            "only the rail payer can terminate the rail"
+        );
+
+        Account storage payer = accounts[rail.token][rail.from];
+
+        // Settle account lockup
+        settleAccountLockup(payer);
+
+        // Check that the rail is not in debt
+        // (i.e., client has enough funds to pay for services already taken on this rail upto and including the current epoch)
+        require(
+            block.number < payer.lockupLastSettledAt + rail.lockupPeriod,
+            "rail is in debt; cannot terminate"
+        );
+
+        // Calculate the effective remaining lockup period that hasn't been settled
+        require(
+            payer.lockupLastSettledAt <= block.number,
+            "lockup settlement epoch cannot be in the future"
+        );
+        uint256 effectiveLockupPeriod = rail.lockupPeriod -
+            (block.number - payer.lockupLastSettledAt);
+
+        // Calculate funds that can be released (funds locked for future epochs + fixed lockup)
+        // note: this does not include the current epoch as the rail still needs to be paid for for the
+        // current epoch
+        uint256 fundsToRelease = (rail.paymentRate * effectiveLockupPeriod) +
+            rail.lockupFixed;
+
+        // Update payer's lockup rate and current lockup
+        require(
+            payer.lockupRate >= rail.paymentRate,
+            "payer lockup rate must be at least rail payment rate"
+        );
+        payer.lockupRate = payer.lockupRate - rail.paymentRate;
+
+        require(
+            payer.lockupCurrent >= fundsToRelease,
+            "payer lockup current must be at least funds to release"
+        );
+        payer.lockupCurrent = payer.lockupCurrent - fundsToRelease;
+
+        // Set rail payment rate and lockup period to 0 for future periods
+        rail.paymentRate = 0;
+        rail.lockupPeriod = 0;
+        rail.lockupFixed = 0;
+
+        // Mark rail as inactive
+        rail.isActive = false;
+
+        // Ensure account invariants hold
+        require(
+            payer.lockupCurrent <= payer.funds,
+            "payer lockup cannot exceed funds after termination"
+        );
+    }
+
     function modifyRailLockup(
         uint256 railId,
         uint256 period,
