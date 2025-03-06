@@ -65,6 +65,8 @@ contract Payments is
         bool isApproved;
         uint256 rateAllowance;
         uint256 lockupAllowance;
+        uint256 rateUsage; // Track actual usage for rate
+        uint256 lockupUsage; // Track actual usage for lockup
     }
 
     // Counter for generating unique rail IDs
@@ -144,6 +146,33 @@ contract Payments is
         approval.isApproved = true;
     }
 
+    function setOperatorApprovalStatus(
+        address token,
+        address operator,
+        bool approved
+    ) external {
+        require(token != address(0), "token address cannot be zero");
+        require(operator != address(0), "operator address cannot be zero");
+
+        operatorApprovals[token][msg.sender][operator].isApproved = approved;
+    }
+
+    function setOperatorAllowances(
+        address token,
+        address operator,
+        uint256 rateAllowance,
+        uint256 lockupAllowance
+    ) external {
+        require(token != address(0), "token address cannot be zero");
+        require(operator != address(0), "operator address cannot be zero");
+
+        OperatorApproval storage approval = operatorApprovals[token][
+            msg.sender
+        ][operator];
+        approval.rateAllowance = rateAllowance;
+        approval.lockupAllowance = lockupAllowance;
+    }
+
     // TODO: Implement Me
     // https://github.com/FilOzone/payments/pull/1/files#r1974415624
     function terminateOperator(address operator) external {}
@@ -210,7 +239,7 @@ contract Payments is
         require(from != address(0), "from address cannot be zero");
         require(to != address(0), "to address cannot be zero");
 
-        // Check if operator is approved
+        // Check if operator is approved - approval is required for rail creation
         OperatorApproval storage approval = operatorApprovals[token][from][
             operator
         ];
@@ -231,56 +260,6 @@ contract Payments is
         return railId;
     }
 
-    function terminateRail(
-        uint256 railId
-    )
-        external
-        validateRailActive(railId)
-        onlyRailClient(railId)
-        noRailModificationInProgress(railId)
-    {
-        Rail storage rail = rails[railId];
-
-        Account storage payer = accounts[rail.token][rail.from];
-        // Settle account lockup and ensure it's fully settled up to the current block
-        (bool fullySettled, uint256 settledEpoch) = settleAccountLockup(payer);
-        require(
-            fullySettled && settledEpoch == block.number,
-            "account lockup must be fully settled to terminate rail"
-        );
-
-        // If there is no arbiter, settle the rail immediately and ensure it is fully settled upto and including
-        // the current epoch
-        if (rail.arbiter == address(0)) {
-            (, uint256 settledUpto, ) = settleRail(railId, block.number);
-            require(
-                settledUpto == block.number,
-                "rail must be fully settled to terminate"
-            );
-        } else {
-            // For arbitrated rails, push the current rate to the queue
-            // This ensures proper settlement when the operator later settles this rail as we're setting the current rail rate to zero in this function
-            rail.rateChangeQueue.enqueue(rail.paymentRate, block.number);
-        }
-
-        // Update payer's lockup rate and current lockup
-        require(
-            payer.lockupRate >= rail.paymentRate,
-            "payer lockup rate must be at least rail payment rate"
-        );
-        payer.lockupRate = payer.lockupRate - rail.paymentRate;
-
-        // Set rail payment rate to 0 for future periods and mark the rail as inactive
-        rail.paymentRate = 0;
-        rail.isActive = false;
-
-        // Ensure account invariants hold
-        require(
-            payer.lockupCurrent <= payer.funds,
-            "payer lockup cannot exceed funds after termination"
-        );
-    }
-
     function modifyRailLockup(
         uint256 railId,
         uint256 period,
@@ -297,8 +276,6 @@ contract Payments is
             rail.from
         ][rail.operator];
 
-        require(approval.isApproved, "operator not approved");
-
         // settle account lockup and if account lockup is not settled upto to the current epoch; revert
         (bool fullySettled, uint256 lockupSettledUpto) = settleAccountLockup(
             payer
@@ -313,15 +290,27 @@ contract Payments is
             (rail.paymentRate * rail.lockupPeriod);
         uint256 newLockup = lockupFixed + (rail.paymentRate * period);
 
-        // assert that operator allowance is respected
-        require(
-            newLockup <= oldLockup + approval.lockupAllowance,
-            "exceeds operator lockup allowance"
-        );
-        approval.lockupAllowance =
-            approval.lockupAllowance +
-            oldLockup -
-            newLockup;
+        // Check if we're increasing or decreasing lockup
+        if (newLockup > oldLockup) {
+            uint256 lockupIncrease = newLockup - oldLockup;
+
+            // Only check allowance if we're increasing lockup
+            require(
+                approval.lockupUsage + lockupIncrease <=
+                    approval.lockupAllowance,
+                "exceeds operator lockup allowance"
+            );
+
+            // Update usage
+            approval.lockupUsage += lockupIncrease;
+        } else if (newLockup < oldLockup) {
+            uint256 lockupDecrease = oldLockup - newLockup;
+
+            // If decreasing, reduce usage (ensuring no underflow)
+            approval.lockupUsage = approval.lockupUsage > lockupDecrease
+                ? approval.lockupUsage - lockupDecrease
+                : 0;
+        }
 
         // Update payer's lockup
         require(
@@ -357,7 +346,6 @@ contract Payments is
         OperatorApproval storage approval = operatorApprovals[rail.token][
             rail.from
         ][rail.operator];
-        require(approval.isApproved, "Operator not approved");
 
         uint256 oldRate = rail.paymentRate;
 
@@ -513,21 +501,51 @@ contract Payments is
         uint256 newTotalLockup = (newRate * rail.lockupPeriod) +
             rail.lockupFixed;
 
-        require(
-            newTotalLockup <= oldTotalLockup + approval.lockupAllowance,
-            "exceeds operator lockup allowance"
-        );
+        // Check if new lockup increases or decreases compared to old lockup
+        if (newTotalLockup > oldTotalLockup) {
+            // For increases, we need available allowance
+            uint256 lockupIncrease = newTotalLockup - oldTotalLockup;
 
-        approval.lockupAllowance =
-            approval.lockupAllowance +
-            oldTotalLockup -
-            newTotalLockup;
+            // If usage would exceed allowance, fail
+            require(
+                approval.lockupUsage + lockupIncrease <=
+                    approval.lockupAllowance,
+                "exceeds operator lockup allowance"
+            );
 
-        require(
-            newRate <= oldRate + approval.rateAllowance,
-            "new rate exceeds operator rate allowance"
-        );
-        approval.rateAllowance = approval.rateAllowance + oldRate - newRate;
+            // Update usage
+            approval.lockupUsage += lockupIncrease;
+        } else if (newTotalLockup < oldTotalLockup) {
+            // For decreases, reduce usage
+            uint256 lockupDecrease = oldTotalLockup - newTotalLockup;
+
+            // Ensure we don't underflow
+            approval.lockupUsage = approval.lockupUsage > lockupDecrease
+                ? approval.lockupUsage - lockupDecrease
+                : 0;
+        }
+
+        // Handle rate change - allow decreases even when allowance is below usage
+        if (newRate > oldRate) {
+            uint256 rateIncrease = newRate - oldRate;
+
+            // Check if increase would push usage above allowance
+            require(
+                approval.rateUsage + rateIncrease <= approval.rateAllowance,
+                "new rate exceeds operator rate allowance"
+            );
+
+            // Update usage
+            approval.rateUsage += rateIncrease;
+        } else if (newRate < oldRate) {
+            // For rate decreases, reduce usage
+            uint256 rateDecrease = oldRate - newRate;
+
+            // Ensure we don't underflow
+            approval.rateUsage = approval.rateUsage > rateDecrease
+                ? approval.rateUsage - rateDecrease
+                : 0;
+        }
     }
 
     function settleRail(
@@ -807,6 +825,7 @@ contract Payments is
             uint256 fractionalEpochs = availableFunds / account.lockupRate;
             settledUpto = account.lockupLastSettledAt + fractionalEpochs;
 
+            //
             // Apply lockup up to this point
             account.lockupCurrent += account.lockupRate * fractionalEpochs;
             account.lockupLastSettledAt = settledUpto;
