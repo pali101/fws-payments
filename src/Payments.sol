@@ -70,6 +70,12 @@ contract Payments is
         uint256 lockupUsage; // Track actual usage for lockup
     }
 
+    struct PaymentCapability {
+        bool rateIsZero;
+        bool terminatedAndSettled;
+        uint256 guaranteedFutureEpochs;
+    }
+
     // Counter for generating unique rail IDs
     uint256 private _nextRailId;
 
@@ -984,6 +990,50 @@ contract Payments is
             account.lockupCurrent += account.lockupRate * fractionalEpochs;
             account.lockupLastSettledAt = settledUpto;
             return (false, settledUpto);
+        }
+    }
+
+    function getFuturePaymentEpochsForRail(
+        uint256 railId
+    ) external view returns (PaymentCapability memory) {
+        Rail storage rail = rails[railId];
+
+        if (rail.from == address(0) || !rail.isActive) {
+            return PaymentCapability(false, false, 0);
+        }
+
+        if (rail.paymentRate == 0) {
+            return PaymentCapability(true, false, 0);
+        }
+
+        // Check if rail is terminated and already settled
+        if (rail.terminationEpoch > 0) {
+            uint256 maxSettlementEpochForTerminated = rail.terminationEpoch +
+                rail.lockupPeriod;
+            if (rail.settledUpTo >= maxSettlementEpochForTerminated) {
+                return PaymentCapability(false, true, 0);
+            } else {
+                // Calculate how many epochs in the future we can guarantee payment for this terminated but unsettled rail
+                uint256 remainingEpochs = maxSettlementEpochForTerminated >
+                    block.number
+                    ? maxSettlementEpochForTerminated - block.number
+                    : 0;
+                return PaymentCapability(false, false, remainingEpochs);
+            }
+        }
+
+        // Determine the maximum future time the client can pay based on their current funds
+        Account memory account = accounts[rail.token][rail.from];
+
+        // First ensure we get an accurate view of current lockup by computing elapsed time
+        uint256 elapsedTime = block.number - account.lockupLastSettledAt;
+        uint256 currentLockupRequired = account.lockupCurrent +
+            (account.lockupRate * elapsedTime);
+
+        if (account.funds >= currentLockupRequired) {
+            return PaymentCapability(false, false, rail.lockupPeriod);
+        } else {
+            return PaymentCapability(false, false, 0);
         }
     }
 }
