@@ -70,9 +70,9 @@ contract Payments is
         uint256 lockupUsage; // Track actual usage for lockup
     }
 
-    struct PaymentCapability {
-        bool rateIsZero;
-        bool terminatedAndSettled;
+    struct RailPaymentCapability {
+        bool terminated;
+        bool zeroRate;
         uint256 guaranteedFutureEpochs;
     }
 
@@ -993,32 +993,32 @@ contract Payments is
         }
     }
 
+    // returns how many epochs worth of payment can be made by this client for the given
+    // rail excluding the current epoch
     function getFuturePaymentEpochsForRail(
         uint256 railId
-    ) external view returns (PaymentCapability memory) {
+    ) external view returns (RailPaymentCapability memory) {
         Rail storage rail = rails[railId];
 
-        if (rail.from == address(0) || !rail.isActive) {
-            return PaymentCapability(false, false, 0);
+        if (!rail.isActive) {
+            return RailPaymentCapability(true, true, 0);
         }
 
         if (rail.paymentRate == 0) {
-            return PaymentCapability(true, false, 0);
+            return RailPaymentCapability(false, true, 0);
         }
 
         // Check if rail is terminated and already settled
         if (rail.terminationEpoch > 0) {
             uint256 maxSettlementEpochForTerminated = rail.terminationEpoch +
                 rail.lockupPeriod;
-            if (rail.settledUpTo >= maxSettlementEpochForTerminated) {
-                return PaymentCapability(false, true, 0);
+            if (block.number >= maxSettlementEpochForTerminated) {
+                return RailPaymentCapability(true, true, 0);
             } else {
                 // Calculate how many epochs in the future we can guarantee payment for this terminated but unsettled rail
-                uint256 remainingEpochs = maxSettlementEpochForTerminated >
-                    block.number
-                    ? maxSettlementEpochForTerminated - block.number
-                    : 0;
-                return PaymentCapability(false, false, remainingEpochs);
+                uint256 remainingEpochs = maxSettlementEpochForTerminated -
+                    block.number;
+                return RailPaymentCapability(true, false, remainingEpochs);
             }
         }
 
@@ -1040,7 +1040,7 @@ contract Payments is
             uint256 additionalEpochs = remainingFunds / account.lockupRate;
 
             return
-                PaymentCapability(
+                RailPaymentCapability(
                     false,
                     false,
                     rail.lockupPeriod + additionalEpochs
@@ -1052,7 +1052,7 @@ contract Payments is
                 : 0;
 
             if (availableFunds == 0) {
-                return PaymentCapability(false, false, 0);
+                return RailPaymentCapability(false, false, 0);
             }
 
             // Round down to the nearest whole epoch
@@ -1061,7 +1061,7 @@ contract Payments is
                 fractionalEpochs;
 
             return
-                PaymentCapability(
+                RailPaymentCapability(
                     false,
                     false,
                     rail.lockupPeriod + settledUpto
