@@ -1024,6 +1024,10 @@ contract Payments is
 
         // Determine the maximum future time the client can pay based on their current funds
         Account memory account = accounts[rail.token][rail.from];
+        require(
+            account.lockupRate != 0,
+            "account lockup can not be zero if rail rate is non-zero"
+        );
 
         // First ensure we get an accurate view of current lockup by computing elapsed time
         uint256 elapsedTime = block.number - account.lockupLastSettledAt;
@@ -1031,9 +1035,37 @@ contract Payments is
             (account.lockupRate * elapsedTime);
 
         if (account.funds >= currentLockupRequired) {
-            return PaymentCapability(false, false, rail.lockupPeriod);
+            uint256 remainingFunds = account.funds - currentLockupRequired;
+
+            uint256 additionalEpochs = remainingFunds / account.lockupRate;
+
+            return
+                PaymentCapability(
+                    false,
+                    false,
+                    rail.lockupPeriod + additionalEpochs
+                );
         } else {
-            return PaymentCapability(false, false, 0);
+            // If insufficient, calculate the fractional epoch where funds became insufficient
+            uint256 availableFunds = account.funds > account.lockupCurrent
+                ? account.funds - account.lockupCurrent
+                : 0;
+
+            if (availableFunds == 0) {
+                return PaymentCapability(false, false, 0);
+            }
+
+            // Round down to the nearest whole epoch
+            uint256 fractionalEpochs = availableFunds / account.lockupRate;
+            uint256 settledUpto = account.lockupLastSettledAt +
+                fractionalEpochs;
+
+            return
+                PaymentCapability(
+                    false,
+                    false,
+                    rail.lockupPeriod + settledUpto
+                );
         }
     }
 }
