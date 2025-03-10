@@ -627,6 +627,36 @@ contract Payments is
         }
     }
 
+    function _handleTerminatedRailSettlement(
+        Rail storage rail,
+        Account storage payer
+    ) internal returns (bool isFullySettled, uint256 maxSettlementEpoch, string memory noteMessage) {
+        // Calculate maximum settlement epoch for terminated rail
+        maxSettlementEpoch = rail.terminationEpoch + rail.lockupPeriod;
+
+        // Check if rail is already fully settled
+        if (rail.settledUpTo >= maxSettlementEpoch) {
+            // If rail is still marked as active, finalize it by returning fixed lockup to client
+            if (rail.isActive) {
+                // Reduce the lockup by the fixed amount
+                require(
+                    payer.lockupCurrent >= rail.lockupFixed,
+                    "lockup inconsistency during rail finalization"
+                );
+                payer.lockupCurrent -= rail.lockupFixed;
+
+                // Mark rail as inactive and clear payment parameters
+                rail.isActive = false;
+                rail.paymentRate = 0;
+                rail.lockupFixed = 0;
+            }
+
+            return (true, maxSettlementEpoch, "rail completely settled and finalized");
+        }
+
+        return (false, maxSettlementEpoch, "");
+    }
+
     function settleRail(
         uint256 railId,
         uint256 untilEpoch,
@@ -655,76 +685,30 @@ contract Payments is
         Account storage payer = accounts[rail.token][rail.from];
 
         // Handle terminated rails
-        uint256 maxSettlementEpochForTerminated;
+        uint256 maxSettlementEpochForTerminated = 0;
         if (rail.terminationEpoch > 0) {
-            // For terminated rails, calculate the maximum epoch to which we can settle:
-            // This is termination epoch + lockup period, representing the final epoch 
-            // for which the rail should receive payment after termination
-            maxSettlementEpochForTerminated =
-                rail.terminationEpoch +
-                rail.lockupPeriod;
-
-            // CASE 1: TERMINATED AND ALREADY FULLY SETTLED RAIL
-            // If we've already settled this rail up to or beyond its maximum settlement point
-            if (rail.settledUpTo >= maxSettlementEpochForTerminated) {
-                // If rail is still marked as active, finalize it by:
-                // 1. Returning fixed lockup to client
-                // 2. Marking rail as inactive
-                if (rail.isActive) {
-                    // Reduce the lockup by the fixed amount - this returns the fixed
-                    // lockup to the client since all payments are now complete
-                    require(
-                        payer.lockupCurrent >= rail.lockupFixed,
-                        "lockup inconsistency during rail finalization"
-                    );
-                    payer.lockupCurrent -= rail.lockupFixed;
-
-                    // Mark rail as inactive and clear payment parameters
-                    rail.isActive = false;
-                    rail.paymentRate = 0;
-                    rail.lockupFixed = 0;
-                }
-
-                // Early return for already settled rail - nothing more to do
-                return (
-                    0,
-                    rail.settledUpTo,
-                    "rail completely settled and finalized"
-                );
+            bool isFullySettled;
+            string memory terminatedNote;
+            
+            // Handle terminated rail settlement and get max settlement epoch
+            (isFullySettled, maxSettlementEpochForTerminated, terminatedNote) = 
+                _handleTerminatedRailSettlement(rail, payer);
+                
+            // Early return for fully settled terminated rails
+            if (isFullySettled) {
+                return (0, rail.settledUpTo, terminatedNote);
             }
-
-            // CASE 2: TERMINATED BUT NOT FULLY SETTLED RAIL
-            // Limit the untilEpoch to the maximum allowed for this terminated rail
-            // This prevents settling beyond termination + lockup period
+            
+            // For terminated but not fully settled rails, limit settlement window
             untilEpoch = min(untilEpoch, maxSettlementEpochForTerminated);
         }
 
         // Update the payer's lockup to account for elapsed time
         settleAccountLockup(payer);
 
-        // Calculate maximum settlement epoch based on rail status and available lockup
-        uint256 maxSettlementEpoch;
-        if (rail.terminationEpoch > 0) {
-            // For terminated rails, use three constraints:
-            // 1. The requested untilEpoch from the function call
-            // 2. The maximum termination limit (termination + lockup period)
-            // 3. The epoch until which the client has sufficient funds locked up
-            maxSettlementEpoch = min(
-                untilEpoch,
-                min(
-                    maxSettlementEpochForTerminated,
-                    payer.lockupLastSettledAt + rail.lockupPeriod
-                )
-            );
-        } else {
-            // For active rails, use only two constraints:
-            // 1. The requested untilEpoch from the function call
-            // 2. The epoch until which the client has sufficient funds locked up
-            maxSettlementEpoch = min(
-                untilEpoch,
-                payer.lockupLastSettledAt + rail.lockupPeriod
-            );
-        }
+        // For terminated rails, untilEpoch was already limited by maxSettlementEpochForTerminated above
+        uint256 maxLockupSettlementEpoch = payer.lockupLastSettledAt + rail.lockupPeriod;
+        uint256 maxSettlementEpoch = min(untilEpoch, maxLockupSettlementEpoch);
 
         uint256 startEpoch = rail.settledUpTo;
 
