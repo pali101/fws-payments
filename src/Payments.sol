@@ -256,8 +256,8 @@ contract Payments is
 
         Account storage acct = accounts[token][msg.sender];
 
-        (bool funded, uint256 settleEpoch) = settleAccountLockup(acct);
-        require(funded && settleEpoch == block.number, "insufficient funds");
+        uint256 settleEpoch = settleAccountLockup(acct);
+        require(settleEpoch == block.number, "insufficient funds");
 
         uint256 available = acct.funds > acct.lockupCurrent
             ? acct.funds - acct.lockupCurrent
@@ -329,11 +329,9 @@ contract Payments is
         ][rail.operator];
 
         // settle account lockup and if account lockup is not settled upto to the current epoch; revert
-        (bool fullySettled, uint256 lockupSettledUpto) = settleAccountLockup(
-            payer
-        );
+        uint256 lockupSettledUpto = settleAccountLockup(payer);
         require(
-            fullySettled && lockupSettledUpto == block.number,
+            lockupSettledUpto == block.number,
             "cannot modify lockup as client does not have enough funds for current account lockup"
         );
 
@@ -403,14 +401,10 @@ contract Payments is
         ][rail.operator];
 
         // Settle the payer's lockup to account for elapsed time
-        (bool fullySettled, uint256 lockupSettledUpto) = settleAccountLockup(
-            payer
-        );
-
+        uint256 lockupSettledUpto = settleAccountLockup(payer);
         // If we're increasing the rate, we require full account lockup setlement before we can proceed
         require(
-            newRate <= oldRate ||
-                (fullySettled && lockupSettledUpto == block.number),
+            newRate <= oldRate || lockupSettledUpto == block.number,
             "account lockup not fully settled; cannot increase rate"
         );
 
@@ -518,11 +512,8 @@ contract Payments is
         // If we've reduced the rate, settle lockup again to account for changes
         // and ensure that account lockup is settled upto and including the current epoch
         if (newRate < oldRate) {
-            (bool settled, uint256 settledUpto) = settleAccountLockup(payer);
-            require(
-                settled && settledUpto == block.number,
-                "account lockup must be fully settled after rate decrease"
-            );
+            uint256 settledUpto = settleAccountLockup(payer);
+            require(settledUpto == block.number, "account lockup must be fully settled after rate decrease");
         }
     }
 
@@ -936,39 +927,21 @@ contract Payments is
         return a < b ? a : b;
     }
 
-    /*
-     * This function calculates and applies the necessary lockup increase based on elapsed time:
-     * 
-     * 1. If no time has elapsed since last settlement, returns immediately with current settlement epoch
-     * 2. If account has zero lockup rate, advances settlement epoch to current block with no lockup change
-     * 3. If account has sufficient funds to cover the full lockup increase:
-     *    - Increases lockup by (lockupRate * elapsedTime)
-     *    - Sets settlement epoch to current block
-     * 4. If account has insufficient funds, calculates partial settlement:
-     *    - Determines maximum number of whole epochs that can be settled with available funds
-     *    - Increases lockup proportionally to these epochs
-     *    - Sets settlement epoch to (lastSettlementEpoch + availableEpochs)
-     *    - Returns (false, partiallySettledEpoch)
-     *
-     * Important guarantees:
-     * - The returned settledUpto value is INCLUSIVE (i.e., settlement is complete for that epoch)
-     * - When fullySettled=true, lockup is settled up to and including the current block
-     * - When fullySettled=false, lockup is settled up to settledUpto but not beyond
-     * - Function will never attempt to settle beyond current block number
-     */
+    // attempts to settle account lockup up to and including the current epoch
+    // returns the actual epoch upto and including which the lockup was settled
     function settleAccountLockup(
         Account storage account
-    ) internal returns (bool fullySettled, uint256 settledUpto) {
+    ) internal returns (uint256 settledUpto) {
         uint256 currentEpoch = block.number;
         uint256 elapsedTime = currentEpoch - account.lockupLastSettledAt;
 
         if (elapsedTime <= 0) {
-            return (true, account.lockupLastSettledAt);
+            return account.lockupLastSettledAt;
         }
 
         if (account.lockupRate == 0) {
             account.lockupLastSettledAt = currentEpoch;
-            return (true, currentEpoch);
+            return currentEpoch;
         }
 
         uint256 additionalLockup = account.lockupRate * elapsedTime;
@@ -977,7 +950,7 @@ contract Payments is
             // If sufficient, apply full lockup
             account.lockupCurrent += additionalLockup;
             account.lockupLastSettledAt = currentEpoch;
-            return (true, currentEpoch);
+            return currentEpoch;
         } else {
             // If insufficient, calculate the fractional epoch where funds became insufficient
             uint256 availableFunds = account.funds > account.lockupCurrent
@@ -985,7 +958,7 @@ contract Payments is
                 : 0;
 
             if (availableFunds == 0) {
-                return (false, account.lockupLastSettledAt);
+                return account.lockupLastSettledAt;
             }
 
             // Round down to the nearest whole epoch
@@ -996,7 +969,7 @@ contract Payments is
             // Apply lockup up to this point
             account.lockupCurrent += account.lockupRate * fractionalEpochs;
             account.lockupLastSettledAt = settledUpto;
-            return (false, settledUpto);
+            return settledUpto;
         }
     }
 
