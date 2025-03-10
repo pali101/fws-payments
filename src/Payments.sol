@@ -316,7 +316,8 @@ contract Payments is
     {
         Rail storage rail = rails[railId];
 
-        // Check if rail is terminated
+        // operator can only reduce fixed lockup on a terminated rail
+        // it cannot change the lockup period or increase fixed lockup
         require(
             rail.terminationEpoch == 0 || (period == rail.lockupPeriod && lockupFixed <= rail.lockupFixed),
             "failed to modify terminated rail: cannot change period or increase fixed lockup"
@@ -343,43 +344,20 @@ contract Payments is
         // For terminated rails, only calculate lockup for the remaining period up to termination
         uint256 newLockup;
         if (rail.terminationEpoch > 0) {
-            // Calculate remaining settlement period for terminated rail
-            uint256 maxSettlementEpoch = rail.terminationEpoch + rail.lockupPeriod;
-            // If we're already past the max settlement epoch, no rate-based lockup is needed
-            if (block.number >= maxSettlementEpoch) {
-                newLockup = lockupFixed; // Only fixed lockup, no rate-based lockup
-            } else {
-                // Calculate remaining epochs that need funds locked
-                uint256 remainingEpochs = maxSettlementEpoch - block.number;
-                // Use the smaller of the requested period or remaining settlement epochs
-                uint256 effectivePeriod = min(period, remainingEpochs);
-                newLockup = lockupFixed + (rail.paymentRate * effectivePeriod);
-            }
+            newLockup = calculateTerminatedRailLockup(
+                rail,
+                lockupFixed
+            );
         } else {
             newLockup = lockupFixed + (rail.paymentRate * period);
         }
 
-        // Check if we're increasing or decreasing lockup
-        if (newLockup > oldLockup) {
-            uint256 lockupIncrease = newLockup - oldLockup;
-
-            // Only check allowance if we're increasing lockup
-            require(
-                approval.lockupUsage + lockupIncrease <=
-                    approval.lockupAllowance,
-                "exceeds operator lockup allowance"
-            );
-
-            // Update usage
-            approval.lockupUsage += lockupIncrease;
-        } else if (newLockup < oldLockup) {
-            uint256 lockupDecrease = oldLockup - newLockup;
-
-            // If decreasing, reduce usage (ensuring no underflow)
-            approval.lockupUsage = approval.lockupUsage > lockupDecrease
-                ? approval.lockupUsage - lockupDecrease
-                : 0;
-        }
+        // Update operator allowance tracking based on lockup changes
+        validateAndUpdateLockupAllowance(
+            approval,
+            oldLockup,
+            newLockup
+        );
 
         // Update payer's lockup
         require(
@@ -562,6 +540,50 @@ contract Payments is
             payee.funds += oneTimePayment;
         }
     }
+   
+    function calculateTerminatedRailLockup(
+        Rail storage rail,
+        uint256 lockupFixed
+    ) internal view returns (uint256) {
+        // Calculate remaining settlement period for terminated rail
+        uint256 maxSettlementEpoch = rail.terminationEpoch + rail.lockupPeriod;
+        
+        // If we're already past the max settlement epoch, no rate-based lockup is needed
+        // as we've already settled rate based payments for the rail completely
+        if (block.number >= maxSettlementEpoch) {
+            return lockupFixed; // Only fixed lockup, no rate-based lockup
+        } else {
+            // Calculate remaining epochs that need funds locked
+            uint256 remainingEpochs = maxSettlementEpoch - block.number;
+            uint256 effectivePeriod = min(rail.lockupPeriod, remainingEpochs);
+            return lockupFixed + (rail.paymentRate * effectivePeriod);
+        }
+    }
+
+    
+    function validateAndUpdateLockupAllowance(
+        OperatorApproval storage approval,
+        uint256 oldLockup,
+        uint256 newLockup
+    ) internal {
+        // Check if we're increasing or decreasing lockup
+        if (newLockup >= oldLockup) {
+            uint256 lockupIncrease = newLockup - oldLockup;
+
+            // Only check allowance if we're increasing lockup
+            require(
+                approval.lockupUsage + lockupIncrease <= approval.lockupAllowance,
+                "exceeds operator lockup allowance"
+            );
+
+            // Update usage
+            approval.lockupUsage += lockupIncrease;
+        } else if (newLockup < oldLockup) {
+            // this should never underflow as lockupUsage should always be greater than the `oldLockup` 
+            uint256 lockupDecrease = oldLockup - newLockup;
+            approval.lockupUsage -= lockupDecrease;
+        }
+    }
 
     function validateAndModifyRateChangeApproval(
         Rail storage rail,
@@ -582,29 +604,12 @@ contract Payments is
         uint256 newTotalLockup = (newRate * rail.lockupPeriod) +
             rail.lockupFixed;
 
-        // Check if new lockup increases or decreases compared to old lockup
-        if (newTotalLockup > oldTotalLockup) {
-            // For increases, we need available allowance
-            uint256 lockupIncrease = newTotalLockup - oldTotalLockup;
-
-            // If usage would exceed allowance, fail
-            require(
-                approval.lockupUsage + lockupIncrease <=
-                    approval.lockupAllowance,
-                "exceeds operator lockup allowance"
-            );
-
-            // Update usage
-            approval.lockupUsage += lockupIncrease;
-        } else if (newTotalLockup < oldTotalLockup) {
-            // For decreases, reduce usage
-            uint256 lockupDecrease = oldTotalLockup - newTotalLockup;
-
-            // Ensure we don't underflow
-            approval.lockupUsage = approval.lockupUsage > lockupDecrease
-                ? approval.lockupUsage - lockupDecrease
-                : 0;
-        }
+        // Handle lockup allowance changes using the shared helper function
+        validateAndUpdateLockupAllowance(
+            approval,
+            oldTotalLockup,
+            newTotalLockup
+        );
 
         // Handle rate change - allow decreases even when allowance is below usage
         if (newRate > oldRate) {
@@ -931,6 +936,26 @@ contract Payments is
         return a < b ? a : b;
     }
 
+    /*
+     * This function calculates and applies the necessary lockup increase based on elapsed time:
+     * 
+     * 1. If no time has elapsed since last settlement, returns immediately with current settlement epoch
+     * 2. If account has zero lockup rate, advances settlement epoch to current block with no lockup change
+     * 3. If account has sufficient funds to cover the full lockup increase:
+     *    - Increases lockup by (lockupRate * elapsedTime)
+     *    - Sets settlement epoch to current block
+     * 4. If account has insufficient funds, calculates partial settlement:
+     *    - Determines maximum number of whole epochs that can be settled with available funds
+     *    - Increases lockup proportionally to these epochs
+     *    - Sets settlement epoch to (lastSettlementEpoch + availableEpochs)
+     *    - Returns (false, partiallySettledEpoch)
+     *
+     * Important guarantees:
+     * - The returned settledUpto value is INCLUSIVE (i.e., settlement is complete for that epoch)
+     * - When fullySettled=true, lockup is settled up to and including the current block
+     * - When fullySettled=false, lockup is settled up to settledUpto but not beyond
+     * - Function will never attempt to settle beyond current block number
+     */
     function settleAccountLockup(
         Account storage account
     ) internal returns (bool fullySettled, uint256 settledUpto) {
