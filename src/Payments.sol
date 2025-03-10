@@ -654,8 +654,7 @@ contract Payments is
             "one-time payment exceeds rail fixed lockup"
         );
 
-        // Calculate the original total lockup amount using effectiveLockupPeriod instead of rail.lockupPeriod
-        uint256 oldTotalLockup = (oldRate * effectiveLockupPeriod) +
+        uint256 oldTotalLockup = (oldRate * rail.lockupPeriod) +
             rail.lockupFixed;
         uint256 newTotalLockup = (newRate * effectiveLockupPeriod) +
             rail.lockupFixed;
