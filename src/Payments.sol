@@ -136,6 +136,21 @@ contract Payments is
         _;
     }
 
+    modifier onlyRailParticipant(uint256 railId) {
+        require(
+            rails[railId].from == msg.sender ||
+            rails[railId].operator == msg.sender ||
+            rails[railId].to == msg.sender,
+            "failed to authorize: caller is not a rail participant"
+        );
+        _;
+    }
+
+    modifier validateRailNotTerminated(uint256 railId) {
+        require(rails[railId].terminationEpoch == 0, "rail already terminated");
+        _;
+    }
+
     function terminateOperator(address operator, address token) external {
         require(operator != address(0), "operator address cannot be zero");
         require(token != address(0), "token address cannot be zero");
@@ -186,22 +201,13 @@ contract Payments is
         approval.rateAllowance = rateAllowance;
         approval.lockupAllowance = lockupAllowance;
     }
-    
+
     function terminateRail(
         uint256 railId
-    ) external validateRailActive(railId) noRailModificationInProgress(railId) {
+    ) external validateRailActive(railId) noRailModificationInProgress(railId) onlyRailParticipant(railId) 
+        validateRailNotTerminated(railId) {
+
         Rail storage rail = rails[railId];
-
-        // Only the client, operator, or payee can terminate the rail
-        require(
-            msg.sender == rail.from ||
-                msg.sender == rail.operator ||
-                msg.sender == rail.to,
-            "caller cannot terminate this rail"
-        );
-
-        require(rail.terminationEpoch == 0, "rail already terminated");
-
         // Set termination epoch to current block
         rail.terminationEpoch = block.number;
 
