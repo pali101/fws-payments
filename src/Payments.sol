@@ -415,7 +415,7 @@ contract Payments is
         // The client should first deposit enough funds to pay for this "debt" and then the rate can be changed.
         require(
             newRate == oldRate ||
-                block.number < payer.lockupLastSettledAt + rail.lockupPeriod,
+                block.number <= payer.lockupLastSettledAt + rail.lockupPeriod,
             "rail is in-debt; cannot change rate"
         );
 
@@ -447,7 +447,7 @@ contract Payments is
                 // by queueuing the previous rate only once
                 if (
                     rail.rateChangeQueue.isEmpty() ||
-                    rail.rateChangeQueue.peek().untilEpoch != block.number
+                    rail.rateChangeQueue.peekTail().untilEpoch != block.number
                 ) {
                     // For arbitrated rails, we need to enqueue the old rate.
                     // This ensures that the old rate is applied up to and including the current block.
@@ -964,8 +964,6 @@ contract Payments is
             // Round down to the nearest whole epoch
             uint256 fractionalEpochs = availableFunds / account.lockupRate;
             settledUpto = account.lockupLastSettledAt + fractionalEpochs;
-
-            //
             // Apply lockup up to this point
             account.lockupCurrent += account.lockupRate * fractionalEpochs;
             account.lockupLastSettledAt = settledUpto;
