@@ -317,16 +317,10 @@ contract Payments is
         Rail storage rail = rails[railId];
 
         // Check if rail is terminated
-        if (rail.terminationEpoch > 0) {
-            require(
-                period == rail.lockupPeriod,
-                "cannot change lockup period on terminated rail"
-            );
-            require(
-                lockupFixed <= rail.lockupFixed,
-                "cannot increase fixed lockup on terminated rail"
-            );
-        }
+        require(
+            rail.terminationEpoch == 0 || (period == rail.lockupPeriod && lockupFixed <= rail.lockupFixed),
+            "failed to modify terminated rail: cannot change period or increase fixed lockup"
+        );
 
         Account storage payer = accounts[rail.token][rail.from];
         OperatorApproval storage approval = operatorApprovals[rail.token][
@@ -403,16 +397,10 @@ contract Payments is
         uint256 oldRate = rail.paymentRate;
 
         // For terminated rails, can only reduce rate, not increase it
-        if (rail.terminationEpoch > 0) {
-            require(
-                newRate <= oldRate,
-                "failed because terminated at epoch: cannot increase rate on terminated rail"
-            );
-            require(
-                oneTimePayment <= rail.lockupFixed,
-                "failed because terminated at epoch: one-time payment exceeds fixed lockup"
-            );
-        }
+        require(
+            rail.terminationEpoch == 0 || newRate <= oldRate,
+            "failed to modify rail: cannot increase rate on terminated rail"
+        );
 
         OperatorApproval storage approval = operatorApprovals[rail.token][
             rail.from
