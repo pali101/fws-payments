@@ -339,7 +339,25 @@ contract Payments is
         // Calculate the change in base lockup
         uint256 oldLockup = rail.lockupFixed +
             (rail.paymentRate * rail.lockupPeriod);
-        uint256 newLockup = lockupFixed + (rail.paymentRate * period);
+            
+        // For terminated rails, only calculate lockup for the remaining period up to termination
+        uint256 newLockup;
+        if (rail.terminationEpoch > 0) {
+            // Calculate remaining settlement period for terminated rail
+            uint256 maxSettlementEpoch = rail.terminationEpoch + rail.lockupPeriod;
+            // If we're already past the max settlement epoch, no rate-based lockup is needed
+            if (block.number >= maxSettlementEpoch) {
+                newLockup = lockupFixed; // Only fixed lockup, no rate-based lockup
+            } else {
+                // Calculate remaining epochs that need funds locked
+                uint256 remainingEpochs = maxSettlementEpoch - block.number;
+                // Use the smaller of the requested period or remaining settlement epochs
+                uint256 effectivePeriod = min(period, remainingEpochs);
+                newLockup = lockupFixed + (rail.paymentRate * effectivePeriod);
+            }
+        } else {
+            newLockup = lockupFixed + (rail.paymentRate * period);
+        }
 
         // Check if we're increasing or decreasing lockup
         if (newLockup > oldLockup) {
