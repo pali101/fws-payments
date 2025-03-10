@@ -166,20 +166,11 @@ contract Payments is
         approval.isApproved = true;
     }
 
-    function setOperatorApprovalStatus(
+
+    function setOperatorApproval(
         address token,
         address operator,
-        bool approved
-    ) external {
-        require(token != address(0), "token address cannot be zero");
-        require(operator != address(0), "operator address cannot be zero");
-
-        operatorApprovals[token][msg.sender][operator].isApproved = approved;
-    }
-
-    function setOperatorAllowances(
-        address token,
-        address operator,
+        bool    approved,
         uint256 rateAllowance,
         uint256 lockupAllowance
     ) external {
@@ -189,10 +180,13 @@ contract Payments is
         OperatorApproval storage approval = operatorApprovals[token][
             msg.sender
         ][operator];
+        
+        // Update approval status and allowances
+        approval.isApproved = approved;
         approval.rateAllowance = rateAllowance;
         approval.lockupAllowance = lockupAllowance;
     }
-
+    
     function terminateRail(
         uint256 railId
     ) external validateRailActive(railId) noRailModificationInProgress(railId) {
