@@ -406,38 +406,10 @@ contract Payments is
             lockupSettledUpto
         );
 
-        // --- Operator Approval Checks ---
-        validateAndModifyRateChangeApproval(
-            rail,
-            approval,
-            oldRate,
-            newRate,
-            oneTimePayment
-        );
-
         // --- Settlement Prior to Rate Change ---
         handleRateChangeSettlement(railId, rail, oldRate, newRate);
 
-        // Verify one-time payment doesn't exceed fixed lockup
-        require(
-            rail.lockupFixed >= oneTimePayment,
-            "one time payment cannot be greater than rail lockupFixed"
-        );
-
-        // Update the rail fixed lockup and payment rate
-        rail.lockupFixed = rail.lockupFixed - oneTimePayment;
-        rail.paymentRate = newRate;
-
-        // Update payer's lockup rate - only if the rail is not terminated
-        if (rail.terminationEpoch == 0) {
-            require(
-                payer.lockupRate >= oldRate,
-                "payer lockup rate cannot be less than old rate"
-            );
-            payer.lockupRate = payer.lockupRate - oldRate + newRate;
-        }
-
-        // Calculate the effective lockup period
+        // Calculate the effective lockup period BEFORE checking allowance
         uint256 effectiveLockupPeriod;
         
         // First calculate standard remaining lockup period (how much hasn't been settled yet)
@@ -454,6 +426,35 @@ contract Payments is
         } else {
             // For active rails, use standard formula
             effectiveLockupPeriod = standardRemainingPeriod;
+        }
+
+        // Verify one-time payment doesn't exceed fixed lockup
+        require(
+            rail.lockupFixed >= oneTimePayment,
+            "one time payment cannot be greater than rail lockupFixed"
+        );
+
+        // --- Operator Approval Checks USING EFFECTIVE LOCKUP PERIOD ---
+        validateAndModifyRateChangeApproval(
+            rail,
+            approval,
+            oldRate,
+            newRate,
+            oneTimePayment,
+            effectiveLockupPeriod 
+        );
+
+        // Update the rail fixed lockup and payment rate
+        rail.lockupFixed = rail.lockupFixed - oneTimePayment;
+        rail.paymentRate = newRate;
+
+        // Update payer's lockup rate - only if the rail is not terminated
+        if (rail.terminationEpoch == 0) {
+            require(
+                payer.lockupRate >= oldRate,
+                "payer lockup rate cannot be less than old rate"
+            );
+            payer.lockupRate = payer.lockupRate - oldRate + newRate;
         }
 
         // Update payer's current lockup with effective lockup period calculation
@@ -644,7 +645,8 @@ contract Payments is
         OperatorApproval storage approval,
         uint256 oldRate,
         uint256 newRate,
-        uint256 oneTimePayment
+        uint256 oneTimePayment,
+        uint256 effectiveLockupPeriod
     ) internal {
         // Ensure the one-time payment does not exceed the available fixed lockup on the rail.
         require(
@@ -652,10 +654,10 @@ contract Payments is
             "one-time payment exceeds rail fixed lockup"
         );
 
-        // Calculate the original total lockup amount:
-        uint256 oldTotalLockup = (oldRate * rail.lockupPeriod) +
+        // Calculate the original total lockup amount using effectiveLockupPeriod instead of rail.lockupPeriod
+        uint256 oldTotalLockup = (oldRate * effectiveLockupPeriod) +
             rail.lockupFixed;
-        uint256 newTotalLockup = (newRate * rail.lockupPeriod) +
+        uint256 newTotalLockup = (newRate * effectiveLockupPeriod) +
             rail.lockupFixed;
 
         // Handle lockup allowance changes using the shared helper function
@@ -666,7 +668,7 @@ contract Payments is
         );
 
         // Handle rate change - allow decreases even when allowance is below usage
-        if (newRate > oldRate) {
+        if (newRate >= oldRate) {
             uint256 rateIncrease = newRate - oldRate;
 
             // Check if increase would push usage above allowance
@@ -678,13 +680,8 @@ contract Payments is
             // Update usage
             approval.rateUsage += rateIncrease;
         } else if (newRate < oldRate) {
-            // For rate decreases, reduce usage
             uint256 rateDecrease = oldRate - newRate;
-
-            // Ensure we don't underflow
-            approval.rateUsage = approval.rateUsage > rateDecrease
-                ? approval.rateUsage - rateDecrease
-                : 0;
+            approval.rateUsage = approval.rateUsage - rateDecrease;
         }
     }
 
