@@ -418,18 +418,6 @@ contract Payments is
         // --- Settlement Prior to Rate Change ---
         handleRateChangeSettlement(railId, rail, oldRate, newRate);
 
-        // Calculate the effective lockup period (remaining period that hasn't been settled)
-        uint256 effectiveLockupPeriod = rail.lockupPeriod -
-            (block.number - payer.lockupLastSettledAt);
-
-        // Verify current lockup is sufficient for the old rate component
-        uint256 oldRateLockupNeeded = (oldRate * effectiveLockupPeriod) +
-            oneTimePayment;
-
-        require(
-            payer.lockupCurrent >= oldRateLockupNeeded,
-            "failed to modify rail payment: insufficient current lockup"
-        );
         // Verify one-time payment doesn't exceed fixed lockup
         require(
             rail.lockupFixed >= oneTimePayment,
@@ -447,6 +435,25 @@ contract Payments is
                 "payer lockup rate cannot be less than old rate"
             );
             payer.lockupRate = payer.lockupRate - oldRate + newRate;
+        }
+
+        // Calculate the effective lockup period
+        uint256 effectiveLockupPeriod;
+        
+        // First calculate standard remaining lockup period (how much hasn't been settled yet)
+        uint256 standardRemainingPeriod = rail.lockupPeriod - (block.number - payer.lockupLastSettledAt);
+        
+        if (rail.terminationEpoch > 0) {
+            uint256 terminationRemainingPeriod = handleTerminatedRailRateChange(rail);
+            
+            // Take the minimum of standard and termination remaining periods
+            // This ensures we don't over-lockup - we're constrained by both:
+            // 1. How much of the lockup period hasn't been settled
+            // 2. How much time remains until termination is complete
+            effectiveLockupPeriod = min(standardRemainingPeriod, terminationRemainingPeriod);
+        } else {
+            // For active rails, use standard formula
+            effectiveLockupPeriod = standardRemainingPeriod;
         }
 
         // Update payer's current lockup with effective lockup period calculation
@@ -553,6 +560,27 @@ contract Payments is
         return lockupFixed + (rail.paymentRate * effectivePeriod); 
     }
 
+ 
+    function handleTerminatedRailRateChange(
+        Rail storage rail
+    ) internal view returns (uint256 remainingSettlementEpochs) {
+        // Calculate the max settlement epoch for this terminated rail
+        uint256 maxSettlementEpoch = rail.terminationEpoch + rail.lockupPeriod;
+        
+        // Case 1: Rail is beyond max settlement epoch - should be finalized, not modified
+        if (block.number > maxSettlementEpoch) {
+            require(
+                false,
+                "cannot modify rail: terminated rail should be finalized"
+            );
+        }
+        
+        remainingSettlementEpochs = maxSettlementEpoch - block.number;
+        
+        
+        return remainingSettlementEpochs;
+    }
+
     function validateRateChangeRequirements(
         Rail storage rail,
         Account storage payer,
@@ -560,7 +588,7 @@ contract Payments is
         uint256 newRate,
         uint256 lockupSettledUpto
     ) internal view {
-        // Case 0: For terminated rails, can only reduce rate, not increase it
+        // For terminated rails, rate can only be decreased
         require(
             rail.terminationEpoch == 0 || newRate <= oldRate,
             "failed to modify rail: cannot increase rate on terminated rail"
