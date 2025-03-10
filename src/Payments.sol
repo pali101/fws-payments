@@ -458,10 +458,6 @@ contract Payments is
         }
 
         // Calculate the effective lockup period (remaining period that hasn't been settled)
-        require(
-            payer.lockupLastSettledAt <= block.number,
-            "lockup settlement epoch cannot be in the future"
-        );
         uint256 effectiveLockupPeriod = rail.lockupPeriod -
             (block.number - payer.lockupLastSettledAt);
 
