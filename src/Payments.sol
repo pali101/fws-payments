@@ -82,10 +82,6 @@ contract Payments is
     // token => owner => Account
     mapping(address => mapping(address => Account)) public accounts;
 
-    // client => operator => array of tokens
-    mapping(address => mapping(address => address[]))
-        public clientOperatorTokens;
-
     // railId => Rail
     mapping(uint256 => Rail) internal rails;
 
@@ -140,24 +136,17 @@ contract Payments is
         _;
     }
 
-    function terminateOperator(address operator) external {
+    function terminateOperator(address operator, address token) external {
         require(operator != address(0), "operator address cannot be zero");
+        require(token != address(0), "token address cannot be zero");
 
-        // Get tokens managed by this operator for the client
-        address[] memory tokens = clientOperatorTokens[msg.sender][operator];
-
-        // Iterate through all tokens and revoke permissions
-        for (uint256 i = 0; i < tokens.length; i++) {
-            address token = tokens[i];
-
-            // Set allowances to 0 and revoke approval
-            OperatorApproval storage approval = operatorApprovals[token][
-                msg.sender
+        // Revoke approval for the given token
+        OperatorApproval storage approval = operatorApprovals[token][
+            msg.sender
             ][operator];
-            approval.rateAllowance = 0;
-            approval.lockupAllowance = 0;
-            approval.isApproved = false;
-        }
+        approval.rateAllowance = 0;
+        approval.lockupAllowance = 0;
+        approval.isApproved = false;
     }
 
     function approveOperator(
@@ -175,19 +164,6 @@ contract Payments is
         approval.rateAllowance = rateAllowance;
         approval.lockupAllowance = lockupAllowance;
         approval.isApproved = true;
-
-        // Add token to the client's list of tokens for this operator if not already present
-        bool tokenExists = false;
-        address[] memory tokens = clientOperatorTokens[msg.sender][operator];
-        for (uint256 i = 0; i < tokens.length; i++) {
-            if (tokens[i] == token) {
-                tokenExists = true;
-                break;
-            }
-        }
-        if (!tokenExists) {
-            clientOperatorTokens[msg.sender][operator].push(token);
-        }
     }
 
     function setOperatorApprovalStatus(
