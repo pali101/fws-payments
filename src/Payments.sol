@@ -168,7 +168,6 @@ contract Payments is
         approval.isApproved = true;
     }
 
-
     function setOperatorApproval(
         address token,
         address operator,
@@ -222,6 +221,10 @@ contract Payments is
             "lockup rate inconsistency"
         );
         payer.lockupRate -= rail.paymentRate;
+        require(
+            payer.lockupCurrent <= payer.funds,
+            "payer's current lockup cannot be greater than their funds"
+        );
     }
 
     function deposit(
@@ -1032,80 +1035,9 @@ contract Payments is
             return settledUpto;
         }
     }
-
-    // returns how many epochs worth of payment can be made by this client for the given
-    // rail excluding the current epoch
-    function getFuturePaymentEpochsForRail(
-        uint256 railId
-    ) external view returns (RailPaymentCapability memory) {
-        Rail storage rail = rails[railId];
-
-        if (!rail.isActive) {
-            return RailPaymentCapability(true, true, 0);
-        }
-
-        if (rail.paymentRate == 0) {
-            return RailPaymentCapability(false, true, 0);
-        }
-
-        // Check if rail is terminated and already settled
-        if (rail.terminationEpoch > 0) {
-            uint256 maxSettlementEpochForTerminated = rail.terminationEpoch +
-                rail.lockupPeriod;
-            if (block.number >= maxSettlementEpochForTerminated) {
-                return RailPaymentCapability(true, true, 0);
-            } else {
-                // Calculate how many epochs in the future we can guarantee payment for this terminated but unsettled rail
-                uint256 remainingEpochs = maxSettlementEpochForTerminated -
-                    block.number;
-                return RailPaymentCapability(true, false, remainingEpochs);
-            }
-        }
-
-        // Determine the maximum future time the client can pay based on their current funds
-        Account memory account = accounts[rail.token][rail.from];
-        require(
-            account.lockupRate != 0,
-            "account lockup can not be zero if rail rate is non-zero"
-        );
-
-        // First ensure we get an accurate view of current lockup by computing elapsed time
-        uint256 elapsedTime = block.number - account.lockupLastSettledAt;
-        uint256 currentLockupRequired = account.lockupCurrent +
-            (account.lockupRate * elapsedTime);
-
-        if (account.funds >= currentLockupRequired) {
-            uint256 remainingFunds = account.funds - currentLockupRequired;
-
-            uint256 additionalEpochs = remainingFunds / account.lockupRate;
-
-            return
-                RailPaymentCapability(
-                    false,
-                    false,
-                    rail.lockupPeriod + additionalEpochs
-                );
-        } else {
-            // If insufficient, calculate the fractional epoch where funds became insufficient
-            uint256 availableFunds = account.funds > account.lockupCurrent
-                ? account.funds - account.lockupCurrent
-                : 0;
-
-            if (availableFunds == 0) {
-                return RailPaymentCapability(false, false, 0);
-            }
-
-            // Round down to the nearest whole epoch
-            uint256 fractionalEpochs = availableFunds / account.lockupRate;
-            uint256 settledUpto = account.lockupLastSettledAt +
-                fractionalEpochs;
-
-            return
-                RailPaymentCapability(
-                    false,
-                    false,
-                    rail.lockupPeriod + settledUpto
-                );
-        }
+   
+    function isRailTerminated(uint256 railId) public view returns (bool) {
+        require(rails[railId].from != address(0), "failed to check: rail does not exist");
+        return rails[railId].terminationEpoch > 0;
     }
 }
