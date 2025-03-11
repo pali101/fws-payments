@@ -151,19 +151,6 @@ contract Payments is
         _;
     }
 
-    function terminateOperator(address operator, address token) external {
-        require(operator != address(0), "operator address cannot be zero");
-        require(token != address(0), "token address cannot be zero");
-
-        // Revoke approval for the given token
-        OperatorApproval storage approval = operatorApprovals[token][
-            msg.sender
-            ][operator];
-        approval.rateAllowance = 0;
-        approval.lockupAllowance = 0;
-        approval.isApproved = false;
-    }
-
     function approveOperator(
         address token,
         address operator,
