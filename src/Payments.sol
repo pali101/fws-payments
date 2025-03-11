@@ -1001,7 +1001,7 @@ contract Payments is
     // returns the actual epoch upto and including which the lockup was settled
     function settleAccountLockup(
         Account storage account
-    ) internal returns (uint256 settledUpto) {
+    ) internal returns (uint256) {
         uint256 currentEpoch = block.number;
         uint256 elapsedTime = currentEpoch - account.lockupLastSettledAt;
 
@@ -1036,11 +1036,12 @@ contract Payments is
 
         // Round down to the nearest whole epoch
         uint256 fractionalEpochs = availableFunds / account.lockupRate;
-        settledUpto = account.lockupLastSettledAt + fractionalEpochs;
         // Apply lockup up to this point
         account.lockupCurrent += account.lockupRate * fractionalEpochs;
-        account.lockupLastSettledAt = settledUpto;
-        return settledUpto;
+        account.lockupLastSettledAt =
+            account.lockupLastSettledAt +
+            fractionalEpochs;
+        return account.lockupLastSettledAt;
     }
 
     function isRailTerminated(uint256 railId) public view returns (bool) {
