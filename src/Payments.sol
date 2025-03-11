@@ -315,14 +315,24 @@ contract Payments is
         onlyRailOperator(railId)
         noRailModificationInProgress(railId)
     {
+        bool isTerminated = isRailTerminated(railId);
+
+        if (isTerminated) {
+            modifyTerminatedRailLockup(railId, period, lockupFixed);
+        } else {
+            modifyActiveRailLockup(railId, period, lockupFixed);
+        }
+    }
+
+    function modifyTerminatedRailLockup(
+        uint256 railId,
+        uint256 period,
+        uint256 lockupFixed
+    ) internal {
         Rail storage rail = rails[railId];
 
-        // operator can only reduce fixed lockup on a terminated rail
-        // it cannot change the lockup period or increase fixed lockup
         require(
-            rail.terminationEpoch == 0 ||
-                (period == rail.lockupPeriod &&
-                    lockupFixed <= rail.lockupFixed),
+            period == rail.lockupPeriod && lockupFixed < rail.lockupFixed,
             "failed to modify terminated rail: cannot change period or increase fixed lockup"
         );
 
@@ -331,39 +341,80 @@ contract Payments is
             rail.from
         ][rail.operator];
 
-        // settle account lockup and if account lockup is not settled upto to the current epoch; revert
         uint256 lockupSettledUpto = settleAccountLockup(payer);
         require(
             lockupSettledUpto == block.number,
-            "cannot modify lockup as client does not have enough funds for current account lockup"
+            "cannot modify terminated rail lockup: client has insufficient funds to cover current account lockup"
         );
 
-        // Calculate the change in base lockup
+        // Calculate the fixed lockup reduction - this is the only change allowed for terminated rails
+        uint256 lockupReduction = rail.lockupFixed - lockupFixed;
+
+        // For terminated rails (whether fully settled or still in settlement period),
+        // we only need to reduce the fixed lockup amount directly because:
+        // 1. Period remains unchanged (enforced by the require statement above)
+        // 2. The rate-based portion of the lockup doesn't change
+        // 3. The only thing changing is the fixed lockup, which is being reduced
+
+        // Update operator allowance - reduce usage by the exact reduction amount
+        approval.lockupUsage -= lockupReduction;
+
+        // Update payer's lockup - subtract the exact reduction amount
+        require(
+            payer.lockupCurrent >= lockupReduction,
+            "payer's current lockup cannot be less than lockup reduction"
+        );
+        payer.lockupCurrent -= lockupReduction;
+
+        rail.lockupFixed = lockupFixed;
+
+        // Final safety check
+        require(
+            payer.lockupCurrent <= payer.funds,
+            "payer's current lockup cannot be greater than their funds"
+        );
+    }
+
+    function modifyActiveRailLockup(
+        uint256 railId,
+        uint256 period,
+        uint256 lockupFixed
+    ) internal {
+        Rail storage rail = rails[railId];
+        Account storage payer = accounts[rail.token][rail.from];
+        OperatorApproval storage approval = operatorApprovals[rail.token][
+            rail.from
+        ][rail.operator];
+
+        // Ensure account lockup is fully settled up to the current epoch
+        uint256 lockupSettledUpto = settleAccountLockup(payer);
+        require(
+            lockupSettledUpto == block.number,
+            "cannot modify active rail lockup: client funds insufficient for current account lockup settlement"
+        );
+
+        // Calculate current (old) lockup - for active rails this is straightforward
         uint256 oldLockup = rail.lockupFixed +
             (rail.paymentRate * rail.lockupPeriod);
 
-        // For terminated rails, only calculate lockup for the remaining period up to termination
-        uint256 newLockup;
-        if (rail.terminationEpoch > 0) {
-            newLockup = calculateTerminatedRailLockup(rail, lockupFixed);
-        } else {
-            newLockup = lockupFixed + (rail.paymentRate * period);
-        }
+        // Calculate new lockup amount with new parameters
+        uint256 newLockup = lockupFixed + (rail.paymentRate * period);
 
         // Update operator allowance tracking based on lockup changes
-        validateAndUpdateLockupAllowance(approval, oldLockup, newLockup);
+        updateOperatorLockupTracking(approval, oldLockup, newLockup);
 
-        // Update payer's lockup
         require(
             payer.lockupCurrent >= oldLockup,
             "payer's current lockup cannot be less than old lockup"
         );
+
         payer.lockupCurrent = payer.lockupCurrent - oldLockup + newLockup;
 
         // Update rail lockup parameters
         rail.lockupPeriod = period;
         rail.lockupFixed = lockupFixed;
 
+        // Final safety check: ensure lockup doesn't exceed available funds
         require(
             payer.lockupCurrent <= payer.funds,
             "payer's current lockup cannot be greater than their funds"
@@ -537,6 +588,12 @@ contract Payments is
     }
 
     function calculateTerminatedRailLockup(
+        Rail storage rail
+    ) internal view returns (uint256) {
+        return calculateTerminatedRailLockup(rail, rail.lockupFixed);
+    }
+
+    function calculateTerminatedRailLockup(
         Rail storage rail,
         uint256 lockupFixed
     ) internal view returns (uint256) {
@@ -553,13 +610,12 @@ contract Payments is
         // CASE 2: RAIL NEEDS FURTHER SETTLEMENT
 
         // Calculate how many more epochs need to be settled
+        // This is the exact number of epochs remaining until max settlement
         uint256 remainingEpochs = maxSettlementEpoch - block.number;
 
-        // The effective period can't be more than the rail's lockup period
-        uint256 effectivePeriod = min(rail.lockupPeriod, remainingEpochs);
-
         // Return fixed lockup plus the rate-based lockup for remaining epochs
-        return lockupFixed + (rail.paymentRate * effectivePeriod);
+        // For terminated rails, we only lock for the remaining epochs, not the full lockup period
+        return lockupFixed + (rail.paymentRate * remainingEpochs);
     }
 
     function handleTerminatedRailRateChange(
@@ -612,29 +668,29 @@ contract Payments is
         );
     }
 
-    function validateAndUpdateLockupAllowance(
+    function updateOperatorLockupTracking(
         OperatorApproval storage approval,
         uint256 oldLockup,
         uint256 newLockup
     ) internal {
-        // Check if we're increasing or decreasing lockup
-        if (newLockup >= oldLockup) {
-            uint256 lockupIncrease = newLockup - oldLockup;
-
-            // Only check allowance if we're increasing lockup
-            require(
-                approval.lockupUsage + lockupIncrease <=
-                    approval.lockupAllowance,
-                "exceeds operator lockup allowance"
-            );
-
-            // Update usage
-            approval.lockupUsage += lockupIncrease;
-        } else if (newLockup < oldLockup) {
-            // this should never underflow as lockupUsage should always be greater than the `oldLockup`
+        // Handle lockup decrease
+        if (newLockup < oldLockup) {
             uint256 lockupDecrease = oldLockup - newLockup;
             approval.lockupUsage -= lockupDecrease;
+            return;
         }
+
+        // Handle lockup increase
+        uint256 lockupIncrease = newLockup - oldLockup;
+
+        // Verify against allowance
+        require(
+            approval.lockupUsage + lockupIncrease <= approval.lockupAllowance,
+            "exceeds operator lockup allowance"
+        );
+
+        // Update usage
+        approval.lockupUsage += lockupIncrease;
     }
 
     function validateAndModifyRateChangeApproval(
@@ -657,11 +713,7 @@ contract Payments is
             rail.lockupFixed;
 
         // Handle lockup allowance changes using the shared helper function
-        validateAndUpdateLockupAllowance(
-            approval,
-            oldTotalLockup,
-            newTotalLockup
-        );
+        updateOperatorLockupTracking(approval, oldTotalLockup, newTotalLockup);
 
         // Handle rate change - allow decreases even when allowance is below usage
         if (newRate >= oldRate) {
