@@ -193,13 +193,30 @@ contract Payments is
         uint256 railId
     ) external validateRailActive(railId) noRailModificationInProgress(railId) onlyRailParticipant(railId) 
         validateRailNotTerminated(railId) {
-
         Rail storage rail = rails[railId];
+        Account storage payer = accounts[rail.token][rail.from];
+        
+        // Settle account lockup to ensure we're up to date
+        settleAccountLockup(payer);
+        
+        // Verify that the account is fully settled up to the current epoch
+        // This ensures that the client has enough funds locked to settle the rail upto
+        // and including (termination epoch aka current epoch + rail lockup period)
+        require(
+            payer.lockupLastSettledAt >= block.number,
+            "cannot terminate rail: failed to settle account lockup completely"
+        );
+
         // Set termination epoch to current block
         rail.terminationEpoch = block.number;
 
         // Remove the rail rate from account lockup rate but don't set rail rate to zero yet
-        Account storage payer = accounts[rail.token][rail.from];
+        // The rail rate will be used to settle the rail and so we can't zero it yet
+        // However, we remove the rail rate from the client lockup rate because we don't want to
+        // lock funds for the rail beyond (current epoch + rail.lockup Period) as we're exiting the rail
+        // after that epoch
+        // Since we fully settled the account lockup upto and including the current epoch above,
+        // we have enough client funds locked to settle the rail upto and including the (termination epoch + rail.lockupPeriod)
         require(
             payer.lockupRate >= rail.paymentRate,
             "lockup rate inconsistency"
