@@ -8,6 +8,7 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "./RateChangeQueue.sol";
+import "@openzeppelin/contracts/utils/Strings.sol";
 
 interface IArbiter {
     struct ArbitrationResult {
@@ -733,46 +734,6 @@ contract Payments is
         }
     }
 
-    function _handleTerminatedRailSettlement(
-        uint256 railId,
-        Rail storage rail,
-        Account storage payer
-    )
-        internal
-        returns (
-            bool isFullySettled,
-            uint256 maxSettlementEpoch,
-            string memory noteMessage
-        )
-    {
-        // Calculate maximum settlement epoch for terminated rail
-        maxSettlementEpoch = maxSettlementEpochForTerminatedRail(railId, rail);
-
-        // Check if rail is already fully settled
-        if (rail.settledUpTo >= maxSettlementEpoch) {
-            // Reduce the lockup by the fixed amount
-            require(
-                payer.lockupCurrent >= rail.lockupFixed,
-                "lockup inconsistency during rail finalization"
-            );
-            payer.lockupCurrent -= rail.lockupFixed;
-
-            // Mark rail as inactive and clear payment parameters
-            rail.isActive = false;
-            rail.paymentRate = 0;
-            rail.lockupFixed = 0;
-            rail.lockupPeriod = 0;
-
-            return (
-                true,
-                maxSettlementEpoch,
-                "rail completely settled and finalized"
-            );
-        }
-
-        return (false, maxSettlementEpoch, "");
-    }
-
     function settleRail(
         uint256 railId,
         uint256 untilEpoch,
@@ -791,45 +752,59 @@ contract Payments is
             untilEpoch <= block.number,
             "failed to settle: cannot settle future epochs"
         );
-
+        
         Rail storage rail = rails[railId];
         Account storage payer = accounts[rail.token][rail.from];
+        
+        // Only the client (payer) of the rail can skip arbitration
+        if (skipArbitration) {
+            require(
+                rail.from == msg.sender,
+                "only the rail client can skip arbitration"
+            );
+        }
 
         // Handle terminated rails
-        uint256 maxSettlementEpochForTerminated = 0;
         if (isRailTerminated(railId)) {
-            bool isFullySettled;
-            string memory terminatedNote;
+            uint256 maxTerminatedRailSettlementEpoch = maxSettlementEpochForTerminatedRail(
+                    railId,
+                    rail
+                );
 
-            // Handle terminated rail settlement and get max settlement epoch
-            (
-                isFullySettled,
-                maxSettlementEpochForTerminated,
-                terminatedNote
-            ) = _handleTerminatedRailSettlement(railId, rail, payer);
-
-            // Early return for fully settled terminated rails
-            if (isFullySettled) {
-                return (0, rail.settledUpTo, terminatedNote);
+            // If rail is already fully settled but still active, finalize it
+            if (rail.settledUpTo >= maxTerminatedRailSettlementEpoch) {
+                finalizeTerminatedRail(rail, payer);
+                return (
+                    0,
+                    rail.settledUpTo,
+                    "rail fully settled and finalized"
+                );
             }
 
             // For terminated but not fully settled rails, limit settlement window
-            untilEpoch = min(untilEpoch, maxSettlementEpochForTerminated);
+            untilEpoch = min(untilEpoch, maxTerminatedRailSettlementEpoch);
         }
 
         // Update the payer's lockup to account for elapsed time
         settleAccountLockup(payer);
 
-        // For terminated rails, untilEpoch was already limited by maxSettlementEpochForTerminated above
         uint256 maxLockupSettlementEpoch = payer.lockupLastSettledAt +
             rail.lockupPeriod;
         uint256 maxSettlementEpoch = min(untilEpoch, maxLockupSettlementEpoch);
 
         uint256 startEpoch = rail.settledUpTo;
-
         // Nothing to settle (already settled or zero-duration)
         if (startEpoch >= maxSettlementEpoch) {
-            return (0, startEpoch, "already settled up to requested epoch");
+            return (
+                0,
+                startEpoch,
+                string(
+                    abi.encodePacked(
+                        "already settled up to maxSettlementEpoch epoch ",
+                        Strings.toString(maxSettlementEpoch)
+                    )
+                )
+            );
         }
 
         // For zero rate rails with empty queue, just advance the settlement epoch
@@ -837,7 +812,17 @@ contract Payments is
         uint256 currentRate = rail.paymentRate;
         if (currentRate == 0 && rail.rateChangeQueue.isEmpty()) {
             rail.settledUpTo = maxSettlementEpoch;
-            return (0, maxSettlementEpoch, "zero rate payment rail");
+
+            return
+                checkAndFinalizeTerminatedRail(
+                    railId,
+                    rail,
+                    payer,
+                    0,
+                    maxSettlementEpoch,
+                    "zero rate payment rail",
+                    "zero rate terminated rail fully settled and finalized"
+                );
         }
 
         // Process settlement depending on whether rate changes exist
@@ -851,17 +836,92 @@ contract Payments is
             );
 
             require(rail.settledUpTo > startEpoch, "No progress in settlement");
-            return (amount, rail.settledUpTo, segmentNote);
-        } else {
+
             return
-                _settleWithRateChanges(
+                checkAndFinalizeTerminatedRail(
+                    railId,
+                    rail,
+                    payer,
+                    amount,
+                    rail.settledUpTo,
+                    segmentNote,
+                    string(
+                        abi.encodePacked(
+                            segmentNote,
+                            "terminated rail fully settled and finalized."
+                        )
+                    )
+                );
+        } else {
+            (
+                uint256 settledAmount,
+                string memory settledNote
+            ) = _settleWithRateChanges(
                     railId,
                     currentRate,
                     startEpoch,
                     maxSettlementEpoch,
                     skipArbitration
                 );
+
+            return
+                checkAndFinalizeTerminatedRail(
+                    railId,
+                    rail,
+                    payer,
+                    settledAmount,
+                    rail.settledUpTo,
+                    settledNote,
+                    string(
+                        abi.encodePacked(
+                            settledNote,
+                            "terminated rail fully settled and finalized."
+                        )
+                    )
+                );
         }
+    }
+
+    // Helper function to check and finalize a terminated rail if needed
+    function checkAndFinalizeTerminatedRail(
+        uint256 railId,
+        Rail storage rail,
+        Account storage payer,
+        uint256 amount,
+        uint256 finalEpoch,
+        string memory regularNote,
+        string memory finalizedNote
+    ) internal returns (uint256, uint256, string memory) {
+        // Check if rail is a terminated rail that's now fully settled
+        if (
+            isRailTerminated(railId) &&
+            rail.settledUpTo >=
+            maxSettlementEpochForTerminatedRail(railId, rail)
+        ) {
+            finalizeTerminatedRail(rail, payer);
+            return (amount, finalEpoch, finalizedNote);
+        }
+
+        return (amount, finalEpoch, regularNote);
+    }
+
+    // Helper function to finalize a terminated rail
+    function finalizeTerminatedRail(
+        Rail storage rail,
+        Account storage payer
+    ) internal {
+        // Reduce the lockup by the fixed amount
+        require(
+            payer.lockupCurrent >= rail.lockupFixed,
+            "lockup inconsistency during rail finalization"
+        );
+        payer.lockupCurrent -= rail.lockupFixed;
+
+        // Mark rail as inactive and clear payment parameters
+        rail.isActive = false;
+        rail.paymentRate = 0;
+        rail.lockupFixed = 0;
+        rail.lockupPeriod = 0;
     }
 
     function _settleWithRateChanges(
@@ -870,10 +930,7 @@ contract Payments is
         uint256 startEpoch,
         uint256 targetEpoch,
         bool skipArbitration
-    )
-        internal
-        returns (uint256 totalSettled, uint256 finalEpoch, string memory note)
-    {
+    ) internal returns (uint256 totalSettled, string memory note) {
         Rail storage rail = rails[railId];
         RateChangeQueue.Queue storage rateQueue = rail.rateChangeQueue;
 
@@ -911,11 +968,7 @@ contract Payments is
                 // if current rate is zero, there's nothing left to do and we've finished settlement
                 if (segmentRate == 0) {
                     rail.settledUpTo = targetEpoch;
-                    return (
-                        totalSettled,
-                        rail.settledUpTo,
-                        "Zero rate payment rail"
-                    );
+                    return (totalSettled, "Zero rate payment rail");
                 }
             }
 
@@ -933,7 +986,7 @@ contract Payments is
 
             // If arbiter returned no progress, exit early without updating state
             if (rail.settledUpTo <= processedEpoch) {
-                return (totalSettled, rail.settledUpTo, arbitrationNote);
+                return (totalSettled, arbitrationNote);
             }
 
             // Add the settled amount to our running total
@@ -941,7 +994,7 @@ contract Payments is
 
             // If arbiter partially settled the segment, exit early
             if (rail.settledUpTo < segmentEndBoundary) {
-                return (totalSettled, rail.settledUpTo, arbitrationNote);
+                return (totalSettled, arbitrationNote);
             }
 
             // Successfully settled full segment, update tracking values
@@ -955,7 +1008,7 @@ contract Payments is
         }
 
         // We've successfully settled up to the target epoch
-        return (totalSettled, rail.settledUpTo, note);
+        return (totalSettled, note);
     }
 
     function _settleSegment(
