@@ -227,11 +227,6 @@ contract Payments is
             "invariant violation: operator rate usage must be at least the rail payment rate"
         );
         approval.rateUsage -= rail.paymentRate;
-
-        require(
-            payer.lockupCurrent <= payer.funds,
-            "invariant violation: payer's current lockup cannot be greater than their funds"
-        );
     }
 
     function deposit(
