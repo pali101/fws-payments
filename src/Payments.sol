@@ -347,11 +347,10 @@ contract Payments is
             rail.from
         ][rail.operator];
 
-        uint256 lockupSettledUpto = settleAccountLockup(payer);
-        require(
-            lockupSettledUpto == block.number,
-            "cannot modify terminated rail lockup: client has insufficient funds to cover current account lockup"
-        );
+        // we don't need to ensure that the account lockup is fully settled here
+        // because we already ensure that enough funds are locked for a terminated rail during
+        // `terminateRail`
+        settleAccountLockup(payer);
 
         // Calculate the fixed lockup reduction - this is the only change allowed for terminated rails
         uint256 lockupReduction = rail.lockupFixed - lockupFixed;
@@ -512,16 +511,6 @@ contract Payments is
             payer.lockupCurrent <= payer.funds,
             "invariant violation: payer lockup cannot exceed funds"
         );
-
-        // If we've reduced the rate, settle lockup again to account for changes
-        // and ensure that account lockup is settled upto and including the current epoch
-        if (newRate < oldRate) {
-            uint256 settledUpto = settleAccountLockup(payer);
-            require(
-                settledUpto == block.number,
-                "account lockup must be fully settled after rate decrease"
-            );
-        }
     }
 
     function handleRateChangeSettlement(
