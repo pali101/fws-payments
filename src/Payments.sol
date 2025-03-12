@@ -463,6 +463,19 @@ contract Payments is
             "one time payment cannot be greater than rail lockupFixed"
         );
 
+        // --- Operator Approval Checks
+        OperatorApproval storage approval = operatorApprovals[rail.token][
+            rail.from
+        ][rail.operator];
+        validateAndModifyRateChangeApproval(
+            rail,
+            approval,
+            oldRate,
+            newRate,
+            oneTimePayment,
+            effectiveLockupPeriod
+        );
+
         // Update the rail fixed lockup and payment rate
         rail.lockupFixed = rail.lockupFixed - oneTimePayment;
         rail.paymentRate = newRate;
@@ -484,19 +497,6 @@ contract Payments is
             (oldRate * effectiveLockupPeriod) +
             (newRate * effectiveLockupPeriod) -
             oneTimePayment;
-
-        // --- Operator Approval Checks AFTER calculating the new lockups and rates ---
-        OperatorApproval storage approval = operatorApprovals[rail.token][
-            rail.from
-        ][rail.operator];
-        validateAndModifyRateChangeApproval(
-            rail,
-            approval,
-            oldRate,
-            newRate,
-            oneTimePayment,
-            effectiveLockupPeriod
-        );
 
         // --- Process the One-Time Payment ---
         processOneTimePayment(payer, payee, oneTimePayment);
@@ -664,16 +664,19 @@ contract Payments is
         uint256 oldLockup = (oldRate * effectiveLockupPeriod) +
             rail.lockupFixed;
         uint256 newLockup = (newRate * effectiveLockupPeriod) +
-            rail.lockupFixed;
+            (rail.lockupFixed - oneTimePayment);
 
-        // note: we've reduced `rail.lockupFixed` by `oneTimePayment` before calling this
-        // so we need to add the oneTimePayment to the new lockup for allowance tracking
-        // as all one time payments are also bound by the operator lockup allowance
-        updateOperatorLockupTracking(
-            approval,
-            oldLockup,
-            newLockup + oneTimePayment
-        );
+        updateOperatorLockupTracking(approval, oldLockup, newLockup);
+
+        if (oneTimePayment > 0) {
+            // one-time payments count towards lockup usage
+            require(
+                approval.lockupUsage + oneTimePayment <=
+                    approval.lockupAllowance,
+                "one-time payment exceeds operator lockup allowance"
+            );
+            approval.lockupUsage += oneTimePayment;
+        }
 
         // handle a rate decrease
         if (newRate < oldRate) {
