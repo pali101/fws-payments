@@ -469,7 +469,7 @@ contract Payments is
 
         // Update payer's lockup rate - only if the rail is not terminated
         // for terminated rails, the payer's lockup rate is already updated during rail termination
-        if (rail.terminationEpoch == 0) {
+        if (!isRailTerminated(rail)) {
             require(
                 payer.lockupRate >= oldRate,
                 "payer lockup rate cannot be less than old rate"
@@ -572,6 +572,11 @@ contract Payments is
         Account storage payer
     ) internal view returns (uint256 effectiveLockupPeriod) {
         if (!isRailTerminated(rail)) {
+            // effective lockup period should be 0 for rails that are in debt
+            // we disallow rate changes for in-debted rails anyways
+            if (isRailInDebt(rail, payer)) {
+                return 0;
+            }
             return
                 rail.lockupPeriod - (block.number - payer.lockupLastSettledAt);
         }
@@ -598,6 +603,11 @@ contract Payments is
                 newRate <= oldRate,
                 "failed to modify rail: cannot increase rate on terminated rail"
             );
+            // Ensure terminated rails are never in debt - this should be an invariant
+            require(
+                !isRailInDebt(rail, payer),
+                "invariant violation: terminated rail cannot be in debt"
+            );
         }
 
         if (lockupSettledUpto == block.number) {
@@ -606,7 +616,7 @@ contract Payments is
         }
 
         // Case 2.A: Lockup not fully settled -> check if rail is in debt
-        if (block.number > payer.lockupLastSettledAt + rail.lockupPeriod) {
+        if (isRailInDebt(rail, payer)) {
             require(newRate == oldRate, "rail is in-debt; cannot change rate");
             return;
         }
@@ -1105,6 +1115,13 @@ contract Payments is
             "failed to check: rail does not exist"
         );
         return rail.terminationEpoch > 0;
+    }
+
+    function isRailInDebt(
+        Rail storage rail,
+        Account storage payer
+    ) internal view returns (bool) {
+        return block.number > payer.lockupLastSettledAt + rail.lockupPeriod;
     }
 
     function min(uint256 a, uint256 b) public pure returns (uint256) {
