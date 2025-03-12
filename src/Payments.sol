@@ -193,13 +193,13 @@ contract Payments is
         Account storage payer = accounts[rail.token][rail.from];
 
         // Settle account lockup to ensure we're up to date
-        settleAccountLockup(payer);
+        uint256 settledUntil = settleAccountLockup(payer);
 
         // Verify that the account is fully settled up to the current epoch
         // This ensures that the client has enough funds locked to settle the rail upto
         // and including (termination epoch aka current epoch + rail lockup period)
         require(
-            payer.lockupLastSettledAt >= block.number,
+            settledUntil >= block.number,
             "cannot terminate rail: failed to settle account lockup completely"
         );
 
@@ -219,7 +219,7 @@ contract Payments is
         payer.lockupRate -= rail.paymentRate;
         require(
             payer.lockupCurrent <= payer.funds,
-            "payer's current lockup cannot be greater than their funds"
+            "invariant violation: payer's current lockup cannot be greater than their funds"
         );
     }
 
@@ -333,7 +333,7 @@ contract Payments is
         Rail storage rail = rails[railId];
 
         require(
-            period == rail.lockupPeriod && lockupFixed < rail.lockupFixed,
+            period == rail.lockupPeriod && lockupFixed <= rail.lockupFixed,
             "failed to modify terminated rail: cannot change period or increase fixed lockup"
         );
 
@@ -372,7 +372,7 @@ contract Payments is
         // Final safety check
         require(
             payer.lockupCurrent <= payer.funds,
-            "payer's current lockup cannot be greater than their funds"
+            "invariant violation: payer's current lockup cannot be greater than their funds"
         );
     }
 
@@ -418,7 +418,7 @@ contract Payments is
         // Final safety check: ensure lockup doesn't exceed available funds
         require(
             payer.lockupCurrent <= payer.funds,
-            "payer's current lockup cannot be greater than their funds"
+            "invariant violation: payer's current lockup cannot be greater than their funds"
         );
     }
 
@@ -508,7 +508,7 @@ contract Payments is
         // Ensure the modified lockup doesn't exceed available funds
         require(
             payer.lockupCurrent <= payer.funds,
-            "payer lockup cannot exceed funds"
+            "invariant violation: payer lockup cannot exceed funds"
         );
 
         // If we've reduced the rate, settle lockup again to account for changes
@@ -1041,7 +1041,7 @@ contract Payments is
         // Invariant check: lockup should never exceed funds
         require(
             payer.lockupCurrent <= payer.funds,
-            "failed to settle: insufficient funds to cover lockup after settlement"
+            "failed to settle: invariant violation: insufficient funds to cover lockup after settlement"
         );
 
         return (settledAmount, note);
@@ -1075,7 +1075,7 @@ contract Payments is
 
         require(
             account.funds >= account.lockupCurrent,
-            "failed to settle: insufficient funds to cover lockup"
+            "failed to settle: invariant violation: insufficient funds to cover lockup"
         );
         // If insufficient, calculate the fractional epoch where funds became insufficient
         uint256 availableFunds = account.funds - account.lockupCurrent;
