@@ -191,6 +191,9 @@ contract Payments is
     {
         Rail storage rail = rails[railId];
         Account storage payer = accounts[rail.token][rail.from];
+        OperatorApproval storage approval = operatorApprovals[rail.token][
+            rail.from
+        ][rail.operator];
 
         // Settle account lockup to ensure we're up to date
         uint256 settledUntil = settleAccountLockup(payer);
@@ -217,6 +220,14 @@ contract Payments is
             "lockup rate inconsistency"
         );
         payer.lockupRate -= rail.paymentRate;
+
+        // Update operator approval rate usage
+        require(
+            approval.rateUsage >= rail.paymentRate,
+            "invariant violation: operator rate usage must be at least the rail payment rate"
+        );
+        approval.rateUsage -= rail.paymentRate;
+
         require(
             payer.lockupCurrent <= payer.funds,
             "invariant violation: payer's current lockup cannot be greater than their funds"
@@ -858,6 +869,18 @@ contract Payments is
         Rail storage rail,
         Account storage payer
     ) internal {
+        // Get operator approval to reduce usage
+        OperatorApproval storage approval = operatorApprovals[rail.token][
+            rail.from
+        ][rail.operator];
+
+        // Reduce operator's lockup usage by the fixed amount
+        require(
+            approval.lockupUsage >= rail.lockupFixed,
+            "invariant violation: operator lockup usage cannot be less than rail fixed lockup"
+        );
+        approval.lockupUsage -= rail.lockupFixed;
+
         // Reduce the lockup by the fixed amount
         require(
             payer.lockupCurrent >= rail.lockupFixed,
