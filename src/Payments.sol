@@ -591,8 +591,7 @@ contract Payments is
     ) internal view {
         if (isRailTerminated(rail)) {
             require(
-                block.number <=
-                    maxSettlementEpochForTerminatedRail(rail),
+                block.number <= maxSettlementEpochForTerminatedRail(rail),
                 "terminated rail is beyond it's max settlement epoch; settle the rail"
             );
             require(
@@ -832,8 +831,7 @@ contract Payments is
         // Check if rail is a terminated rail that's now fully settled
         if (
             isRailTerminated(rail) &&
-            rail.settledUpTo >=
-            maxSettlementEpochForTerminatedRail(rail)
+            rail.settledUpTo >= maxSettlementEpochForTerminatedRail(rail)
         ) {
             finalizeTerminatedRail(rail, payer);
             return (amount, finalEpoch, finalizedNote);
