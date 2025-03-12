@@ -601,7 +601,6 @@ contract Payments is
                     maxSettlementEpochForTerminatedRail(railId, rail),
                 "terminated rail is beyond it's max settlement epoch; settle the rail"
             );
-
             require(
                 newRate <= oldRate,
                 "failed to modify rail: cannot increase rate on terminated rail"
@@ -753,11 +752,9 @@ contract Payments is
             return (
                 0,
                 startEpoch,
-                string(
-                    abi.encodePacked(
-                        "already settled up to maxSettlementEpoch epoch ",
-                        Strings.toString(maxSettlementEpoch)
-                    )
+                string.concat(
+                    "already settled up to epoch ",
+                    Strings.toString(maxSettlementEpoch)
                 )
             );
         }
@@ -800,11 +797,9 @@ contract Payments is
                     amount,
                     rail.settledUpTo,
                     segmentNote,
-                    string(
-                        abi.encodePacked(
-                            segmentNote,
-                            "terminated rail fully settled and finalized."
-                        )
+                    string.concat(
+                        segmentNote,
+                        "terminated rail fully settled and finalized."
                     )
                 );
         } else {
@@ -827,11 +822,9 @@ contract Payments is
                     settledAmount,
                     rail.settledUpTo,
                     settledNote,
-                    string(
-                        abi.encodePacked(
-                            settledNote,
-                            "terminated rail fully settled and finalized."
-                        )
+                    string.concat(
+                        settledNote,
+                        "terminated rail fully settled and finalized."
                     )
                 );
         }
