@@ -316,22 +316,21 @@ contract Payments is
         onlyRailOperator(railId)
         noRailModificationInProgress(railId)
     {
-        bool isTerminated = isRailTerminated(railId);
+        Rail storage rail = rails[railId];
+        bool isTerminated = isRailTerminated(rail);
 
         if (isTerminated) {
-            modifyTerminatedRailLockup(railId, period, lockupFixed);
+            modifyTerminatedRailLockup(rail, period, lockupFixed);
         } else {
-            modifyActiveRailLockup(railId, period, lockupFixed);
+            modifyActiveRailLockup(rail, period, lockupFixed);
         }
     }
 
     function modifyTerminatedRailLockup(
-        uint256 railId,
+        Rail storage rail,
         uint256 period,
         uint256 lockupFixed
     ) internal {
-        Rail storage rail = rails[railId];
-
         require(
             period == rail.lockupPeriod && lockupFixed <= rail.lockupFixed,
             "failed to modify terminated rail: cannot change period or increase fixed lockup"
@@ -377,11 +376,10 @@ contract Payments is
     }
 
     function modifyActiveRailLockup(
-        uint256 railId,
+        Rail storage rail,
         uint256 period,
         uint256 lockupFixed
     ) internal {
-        Rail storage rail = rails[railId];
         Account storage payer = accounts[rail.token][rail.from];
         OperatorApproval storage approval = operatorApprovals[rail.token][
             rail.from
@@ -443,7 +441,6 @@ contract Payments is
 
         // Validate rate changes based on rail state and account lockup
         validateRateChangeRequirements(
-            railId,
             rail,
             payer,
             oldRate,
@@ -456,7 +453,6 @@ contract Payments is
 
         // Calculate the effective lockup period
         uint256 effectiveLockupPeriod = calculateEffectiveLockupPeriod(
-            railId,
             rail,
             payer
         );
@@ -572,11 +568,10 @@ contract Payments is
     }
 
     function calculateEffectiveLockupPeriod(
-        uint256 railId,
         Rail storage rail,
         Account storage payer
     ) internal view returns (uint256 effectiveLockupPeriod) {
-        if (!isRailTerminated(railId)) {
+        if (!isRailTerminated(rail)) {
             return
                 rail.lockupPeriod - (block.number - payer.lockupLastSettledAt);
         }
@@ -584,21 +579,20 @@ contract Payments is
         // For terminated rails, we only need to consider the remaining termination period
         // When a rail is terminated, we ensure account lockup is fully settled up to the current epoch
         // and we've already locked enough funds until termination epoch + rail lockup period
-        return remainingEpochsForTerminatedRail(railId, rail);
+        return remainingEpochsForTerminatedRail(rail);
     }
 
     function validateRateChangeRequirements(
-        uint256 railId,
         Rail storage rail,
         Account storage payer,
         uint256 oldRate,
         uint256 newRate,
         uint256 lockupSettledUpto
     ) internal view {
-        if (isRailTerminated(railId)) {
+        if (isRailTerminated(rail)) {
             require(
                 block.number <=
-                    maxSettlementEpochForTerminatedRail(railId, rail),
+                    maxSettlementEpochForTerminatedRail(rail),
                 "terminated rail is beyond it's max settlement epoch; settle the rail"
             );
             require(
@@ -719,9 +713,8 @@ contract Payments is
         }
 
         // Handle terminated rails
-        if (isRailTerminated(railId)) {
+        if (isRailTerminated(rail)) {
             uint256 maxTerminatedRailSettlementEpoch = maxSettlementEpochForTerminatedRail(
-                    railId,
                     rail
                 );
 
@@ -767,7 +760,6 @@ contract Payments is
 
             return
                 checkAndFinalizeTerminatedRail(
-                    railId,
                     rail,
                     payer,
                     0,
@@ -791,7 +783,6 @@ contract Payments is
 
             return
                 checkAndFinalizeTerminatedRail(
-                    railId,
                     rail,
                     payer,
                     amount,
@@ -816,7 +807,6 @@ contract Payments is
 
             return
                 checkAndFinalizeTerminatedRail(
-                    railId,
                     rail,
                     payer,
                     settledAmount,
@@ -832,7 +822,6 @@ contract Payments is
 
     // Helper function to check and finalize a terminated rail if needed
     function checkAndFinalizeTerminatedRail(
-        uint256 railId,
         Rail storage rail,
         Account storage payer,
         uint256 amount,
@@ -842,9 +831,9 @@ contract Payments is
     ) internal returns (uint256, uint256, string memory) {
         // Check if rail is a terminated rail that's now fully settled
         if (
-            isRailTerminated(railId) &&
+            isRailTerminated(rail) &&
             rail.settledUpTo >=
-            maxSettlementEpochForTerminatedRail(railId, rail)
+            maxSettlementEpochForTerminatedRail(rail)
         ) {
             finalizeTerminatedRail(rail, payer);
             return (amount, finalEpoch, finalizedNote);
@@ -1089,24 +1078,19 @@ contract Payments is
     }
 
     function maxSettlementEpochForTerminatedRail(
-        uint256 railId,
         Rail storage rail
     ) internal view returns (uint256) {
-        require(isRailTerminated(railId), "rail is not terminated");
+        require(isRailTerminated(rail), "rail is not terminated");
         return rail.terminationEpoch + rail.lockupPeriod;
     }
 
     function remainingEpochsForTerminatedRail(
-        uint256 railId,
         Rail storage rail
     ) internal view returns (uint256) {
-        require(isRailTerminated(railId), "rail is not terminated");
+        require(isRailTerminated(rail), "rail is not terminated");
 
         // Calculate the maximum settlement epoch for this terminated rail
-        uint256 maxSettlementEpoch = maxSettlementEpochForTerminatedRail(
-            railId,
-            rail
-        );
+        uint256 maxSettlementEpoch = maxSettlementEpochForTerminatedRail(rail);
 
         // If current block beyond max settlement, return 0
         if (block.number > maxSettlementEpoch) {
@@ -1117,12 +1101,12 @@ contract Payments is
         return maxSettlementEpoch - block.number;
     }
 
-    function isRailTerminated(uint256 railId) public view returns (bool) {
+    function isRailTerminated(Rail storage rail) internal view returns (bool) {
         require(
-            rails[railId].from != address(0),
+            rail.from != address(0),
             "failed to check: rail does not exist"
         );
-        return rails[railId].terminationEpoch > 0;
+        return rail.terminationEpoch > 0;
     }
 
     function min(uint256 a, uint256 b) public pure returns (uint256) {
