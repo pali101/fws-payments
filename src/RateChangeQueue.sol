@@ -39,6 +39,13 @@ library RateChangeQueue {
         require(queue.head < queue.tail, "Queue is empty");
         return queue.changes[queue.head];
     }
+    
+    function peekTail(
+        Queue storage queue
+    ) internal view returns (RateChange memory) {
+        require(queue.head < queue.tail, "Queue is empty");
+        return queue.changes[queue.tail - 1];
+    }
 
     function isEmpty(Queue storage queue) internal view returns (bool) {
         return queue.head >= queue.tail;
