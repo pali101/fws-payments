@@ -48,7 +48,6 @@ contract Payments is
     }
 
     struct Rail {
-        bool isActive;
         address token;
         address from;
         address to;
@@ -60,7 +59,6 @@ contract Payments is
         // epoch up to and including which this rail has been settled
         uint256 settledUpTo;
         RateChangeQueue.Queue rateChangeQueue;
-        bool isLocked; // Indicates if the rail is currently being modified
         uint256 terminationEpoch; // Epoch at which the rail was terminated (0 if not terminated)
     }
 
@@ -100,16 +98,11 @@ contract Payments is
     ) internal override onlyOwner {}
 
     modifier validateRailActive(uint256 railId) {
-        require(rails[railId].from != address(0), "rail does not exist");
-        require(rails[railId].isActive, "rail is inactive");
+        require(
+            rails[railId].from != address(0),
+            "rail does not exist or is beyond it's last settlement after termination"
+        );
         _;
-    }
-
-    modifier noRailModificationInProgress(uint256 railId) {
-        require(!rails[railId].isLocked, "Modification already in progress");
-        rails[railId].isLocked = true;
-        _;
-        rails[railId].isLocked = false;
     }
 
     modifier onlyRailClient(uint256 railId) {
@@ -168,7 +161,7 @@ contract Payments is
     )
         external
         validateRailActive(railId)
-        noRailModificationInProgress(railId)
+        nonReentrant
         onlyRailParticipant(railId)
         validateRailNotTerminated(railId)
     {
@@ -273,7 +266,7 @@ contract Payments is
         address from,
         address to,
         address arbiter
-    ) external noRailModificationInProgress(_nextRailId) returns (uint256) {
+    ) external nonReentrant returns (uint256) {
         address operator = msg.sender;
         require(token != address(0), "token address cannot be zero");
         require(from != address(0), "from address cannot be zero");
@@ -293,7 +286,6 @@ contract Payments is
         rail.to = to;
         rail.operator = operator;
         rail.arbiter = arbiter;
-        rail.isActive = true;
         rail.settledUpTo = block.number;
         rail.terminationEpoch = 0;
 
@@ -308,7 +300,7 @@ contract Payments is
         external
         validateRailActive(railId)
         onlyRailOperator(railId)
-        noRailModificationInProgress(railId)
+        nonReentrant
     {
         Rail storage rail = rails[railId];
         bool isTerminated = isRailTerminated(rail);
@@ -316,7 +308,7 @@ contract Payments is
         if (isTerminated) {
             modifyTerminatedRailLockup(rail, period, lockupFixed);
         } else {
-            modifyActiveRailLockup(rail, period, lockupFixed);
+            modifyNonTerminatedRailLockup(rail, period, lockupFixed);
         }
     }
 
@@ -368,7 +360,7 @@ contract Payments is
         );
     }
 
-    function modifyActiveRailLockup(
+    function modifyNonTerminatedRailLockup(
         Rail storage rail,
         uint256 period,
         uint256 lockupFixed
@@ -378,19 +370,46 @@ contract Payments is
             rail.from
         ][rail.operator];
 
-        // Ensure account lockup is fully settled up to the current epoch
+        // Settle account lockup as much as possible
         uint256 lockupSettledUpto = settleAccountLockup(payer);
+
+        // Check for rail in debt before modifying lockup
         require(
-            lockupSettledUpto == block.number,
-            "cannot modify active rail lockup: client funds insufficient for current account lockup settlement"
+            !isRailInDebt(rail, payer),
+            "cannot modify rail lockup: rail is in debt"
         );
 
-        // Calculate current (old) lockup - for active rails this is straightforward
+        // Only require full settlement if increasing period or fixed lockup
+        if (period > rail.lockupPeriod || lockupFixed > rail.lockupFixed) {
+            require(
+                lockupSettledUpto == block.number,
+                "cannot increase lockup: client funds insufficient for current account lockup settlement"
+            );
+        } else if (period < rail.lockupPeriod) {
+            // When reducing period, ensure we still cover all unsettled epochs
+            require(
+                payer.lockupLastSettledAt + period >= block.number,
+                "cannot reduce lockup period below what's needed for unsettled epochs"
+            );
+        }
+
+        // Calculate effective lockup period for the old period
+        uint256 oldEffectiveLockupPeriod = rail.lockupPeriod -
+            (block.number - payer.lockupLastSettledAt);
+
+        // Calculate effective lockup period for the updated period
+        uint256 newEffectiveLockupPeriod = period -
+            (block.number - payer.lockupLastSettledAt);
+
+        // Calculate current (old) lockup using effective lockup period
         uint256 oldLockup = rail.lockupFixed +
-            (rail.paymentRate * rail.lockupPeriod);
+            (rail.paymentRate * oldEffectiveLockupPeriod);
 
         // Calculate new lockup amount with new parameters
-        uint256 newLockup = lockupFixed + (rail.paymentRate * period);
+        // We can safely use min(period, effectiveLockupPeriod) here now that we've added
+        // the explicit check to ensure period doesn't fall below unsettled epochs
+        uint256 newLockup = lockupFixed +
+            (rail.paymentRate * newEffectiveLockupPeriod);
 
         // Update operator allowance tracking based on lockup changes
         updateOperatorLockupTracking(approval, oldLockup, newLockup);
@@ -421,7 +440,7 @@ contract Payments is
         external
         validateRailActive(railId)
         onlyRailOperator(railId)
-        noRailModificationInProgress(railId)
+        nonReentrant
     {
         Rail storage rail = rails[railId];
         Account storage payer = accounts[rail.token][rail.from];
@@ -914,11 +933,8 @@ contract Payments is
         );
         payer.lockupCurrent -= rail.lockupFixed;
 
-        // Mark rail as inactive and clear payment parameters
-        rail.isActive = false;
-        rail.paymentRate = 0;
-        rail.lockupFixed = 0;
-        rail.lockupPeriod = 0;
+        // Zero out the rail to mark it as inactive
+        _zeroOutRail(rail);
     }
 
     function _settleWithRateChanges(
@@ -1174,6 +1190,22 @@ contract Payments is
         Account storage payer
     ) internal view returns (bool) {
         return block.number > payer.lockupLastSettledAt + rail.lockupPeriod;
+    }
+
+    function _zeroOutRail(Rail storage rail) internal {
+        rail.token = address(0);
+        rail.from = address(0); // This now marks the rail as inactive
+        rail.to = address(0);
+        rail.operator = address(0);
+        rail.arbiter = address(0);
+        rail.paymentRate = 0;
+        rail.lockupFixed = 0;
+        rail.lockupPeriod = 0;
+        rail.settledUpTo = 0;
+        rail.terminationEpoch = 0;
+
+        // Clear the rate change queue
+        rail.rateChangeQueue.clear();
     }
 }
 
