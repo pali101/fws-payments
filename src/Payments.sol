@@ -1217,6 +1217,14 @@ contract Payments is
     }
 
     function _zeroOutRail(Rail storage rail) internal {
+        // Check if queue is empty before clearing
+        require(
+            rail.rateChangeQueue.isEmpty(),
+            "rate change queue must be empty post full settlement"
+        );
+        // Clear the rate change queue
+        rail.rateChangeQueue.clear();
+
         rail.token = address(0);
         rail.from = address(0); // This now marks the rail as inactive
         rail.to = address(0);
@@ -1227,9 +1235,6 @@ contract Payments is
         rail.lockupPeriod = 0;
         rail.settledUpTo = 0;
         rail.terminationEpoch = 0;
-
-        // Clear the rate change queue
-        rail.rateChangeQueue.clear();
     }
 }
 
