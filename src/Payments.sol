@@ -257,6 +257,7 @@ contract Payments is
                 lockupFixed: rail.lockupFixed,
                 settledUpTo: rail.settledUpTo,
                 endEpoch: rail.endEpoch
+
             });
     }
 
@@ -292,6 +293,7 @@ contract Payments is
     /// @custom:constraint Caller must be a rail client or operator.
     /// @custom:constraint Rail must be active and not already terminated.
     /// @custom:constraint If called by the client, the payer's account must be fully funded (lockup must be fully settled).
+    /// @custom:constraint If called by the operator, the payer's account lockup settlement is not checked.
     function terminateRail(
         uint256 railId
     )
@@ -598,7 +600,7 @@ contract Payments is
 
             require(
                 newRate <= oldRate,
-                "failed to modify rail: cannot increase rate on terminated rail"
+                "failed to modify rail: cannot change rate on terminated rail"
             );
         } else {
             require(
@@ -824,6 +826,7 @@ contract Payments is
         Account storage payer = accounts[rail.token][rail.from];
 
         // Handle terminated and fully settled rails that are still not finalised
+
         if (isRailTerminated(rail) && rail.settledUpTo >= rail.endEpoch) {
             finalizeTerminatedRail(rail, payer);
             return (0, rail.settledUpTo, "rail fully settled and finalized");
