@@ -495,11 +495,11 @@ contract RailSettlementTest is Test, BaseTestHelper {
         assertEq(payeeAfter.funds, payeeBefore.funds + expectedNetPayeeAmount, "Payee funds mismatch");
         assertEq(operatorAfter.funds, operatorBefore.funds + expectedOperatorCommission, "Operator funds mismatch");
         assertEq(feesAfter, feesBefore + expectedPaymentFee, "Accumulated fees mismatch");
-        
+
         // --- Test Fees Withdrawal and Subsequent Fee Accumulation ---
-        
+
         // 3. Check the fee tokens array before withdrawal
-        (address[] memory tokensBeforeWithdrawal, uint256[] memory amountsBeforeWithdrawal, uint256 countBeforeWithdrawal) = 
+        (address[] memory tokensBeforeWithdrawal, uint256[] memory amountsBeforeWithdrawal, uint256 countBeforeWithdrawal) =
             payments.getAllAccumulatedFees();
             
         // Should only have one token with accumulated fees
