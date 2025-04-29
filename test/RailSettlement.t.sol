@@ -82,11 +82,9 @@ contract RailSettlementTest is Test, BaseTestHelper {
         uint256 expectedEpoch = 2; // Initial epoch (1) + 1 epoch
         
         // First settlement
-        vm.prank(USER1);
         settlementHelper.settleRailAndVerify(railId, block.number, expectedAmount, expectedEpoch);
         
         // Settle again - should be a no-op since we're already settled to the expected epoch
-        vm.prank(USER1);
         settlementHelper.settleRailAndVerify(railId, block.number, 0, expectedEpoch);
         
         // Add more funds and settle again
@@ -97,7 +95,6 @@ contract RailSettlementTest is Test, BaseTestHelper {
         uint256 expectedAmount2 = rate * 6; // 6 more epochs * 50 ether
         
         // Third settlement
-        vm.prank(USER1);
         settlementHelper.settleRailAndVerify(railId, block.number, expectedAmount2, block.number);
     }
 
@@ -128,7 +125,6 @@ contract RailSettlementTest is Test, BaseTestHelper {
         uint256 expectedAmount = rate * 5; // 5 blocks * 5 ether
 
         // Settle with arbitration
-        vm.prank(USER1);
         RailSettlementHelpers.SettlementResult memory result = 
             settlementHelper.settleRailAndVerify(railId, block.number, expectedAmount, block.number);
         
@@ -159,11 +155,24 @@ contract RailSettlementTest is Test, BaseTestHelper {
         // Verify reduced amount (80% of original)
         uint256 expectedAmount = (rate * 5 * 80) / 100; // 5 blocks * 10 ether * 80%
 
-        // Settle with arbitration
-        vm.prank(USER1);
+        // Calculate expected contract fee (1% of the arbitrated amount)
+        uint256 paymentFee = (expectedAmount * payments.PAYMENT_FEE_BPS()) / payments.COMMISSION_MAX_BPS();
+        uint256 netPayeeAmount = expectedAmount - paymentFee;
+
+        // Capture fee balance before settlement
+        uint256 feesBefore = payments.accumulatedFees(address(token));
+
+        // Settle with arbitration - verify against NET payee amount
         RailSettlementHelpers.SettlementResult memory result = 
             settlementHelper.settleRailAndVerify(railId, block.number, expectedAmount, block.number);
         
+        // Verify accumulated fees increased correctly
+        uint256 feesAfter = payments.accumulatedFees(address(token));
+        assertEq(feesAfter, feesBefore + paymentFee, "Accumulated fees did not increase correctly");
+        assertEq(result.netPayeeAmount, netPayeeAmount, "Net payee amount incorrect");
+        assertEq(result.paymentFee, paymentFee, "Payment fee incorrect");
+        assertEq(result.operatorCommission, 0, "Operator commission incorrect");
+
         // Verify arbiter note
         assertEq(result.note, "Arbiter reduced payment amount", "Arbiter note should match");
     }
@@ -195,7 +204,6 @@ contract RailSettlementTest is Test, BaseTestHelper {
         uint256 expectedAmount = rate * expectedDuration; // expectedDuration blocks * 10 ether
 
         // Settle with arbitration
-        vm.prank(USER1);
         RailSettlementHelpers.SettlementResult memory result = 
             settlementHelper.settleRailAndVerify(railId, block.number, expectedAmount, expectedSettledUpto);
         
@@ -265,7 +273,6 @@ contract RailSettlementTest is Test, BaseTestHelper {
 
         // First settlement
         uint256 expectedAmount1 = rate * 3; // 3 blocks * 10 ether
-        vm.prank(USER1);
         settlementHelper.settleRailAndVerify(railId, block.number, expectedAmount1, block.number);
         
         // Terminate the rail
@@ -290,7 +297,7 @@ contract RailSettlementTest is Test, BaseTestHelper {
 
         // Final settlement after termination 
         vm.prank(USER1);
-        (uint256 settledAmount, uint256 settledUpto,) = 
+        (uint256 settledAmount, uint256 netPayeeAmount, uint256 paymentFee, uint256 operatorCommission, uint256 settledUpto,) = 
             payments.settleRail(railId, block.number);
         
         // Should settle up to endEpoch, which is lockupPeriod blocks after the last settlement
@@ -303,7 +310,7 @@ contract RailSettlementTest is Test, BaseTestHelper {
         Payments.Account memory recipientAfter = helper.getAccountData(USER2);
         
         assertEq(userBefore.funds - userAfter.funds, expectedAmount2, "User funds not reduced correctly in final settlement");
-        assertEq(recipientAfter.funds - recipientBefore.funds, expectedAmount2, "Recipient funds not increased correctly in final settlement");
+        assertEq(recipientAfter.funds - recipientBefore.funds, netPayeeAmount, "Recipient funds not increased correctly in final settlement");
         
         // Verify account lockup is cleared after full settlement
         assertEq(userAfter.lockupCurrent, 0, "Account lockup should be cleared after full rail settlement");
@@ -324,9 +331,10 @@ contract RailSettlementTest is Test, BaseTestHelper {
         );
 
         // Settle immediately without advancing blocks - should be a no-op
-        vm.prank(USER1);
         RailSettlementHelpers.SettlementResult memory result = 
             settlementHelper.settleRailAndVerify(railId, block.number, 0, block.number);
+
+        console.log("result.note", result.note);
 
         // Verify the note indicates already settled
         assertTrue(
@@ -352,5 +360,183 @@ contract RailSettlementTest is Test, BaseTestHelper {
         string memory b
     ) internal pure returns (bool) {
         return keccak256(abi.encodePacked(a)) == keccak256(abi.encodePacked(b));
+    }
+
+    function testPayeeCommissionLimitEnforcement() public {
+        // Setup operator approval first
+        helper.setupOperatorApproval(
+            USER1, // from
+            OPERATOR,
+            10 ether, // rate allowance (arbitrary for this test)
+            100 ether // lockup allowance (arbitrary for this test)
+        );
+
+        // Payee (USER2) sets a max commission limit of 5% (500 BPS)
+        uint256 payeeLimitBps = 500;
+        vm.startPrank(USER2);
+        payments.setPayeeMaxCommission(address(token), payeeLimitBps);
+        vm.stopPrank();
+
+        // Attempt 1: Operator tries to create rail exceeding the limit (501 BPS)
+        uint256 exceedingCommissionBps = payeeLimitBps + 1;
+        vm.startPrank(OPERATOR);
+        vm.expectRevert(bytes("commission exceeds payee limit"));
+        payments.createRail(
+            address(token),
+            USER1,          // from
+            USER2,          // to (payee with limit)
+            address(0),     // arbiter
+            exceedingCommissionBps
+        );
+        vm.stopPrank();
+
+        // Attempt 2: Operator tries to create rail exactly at the limit (500 BPS)
+        uint256 matchingCommissionBps = payeeLimitBps;
+        vm.startPrank(OPERATOR);
+        // This call should succeed (no revert)
+        uint256 railId1 = payments.createRail(
+            address(token),
+            USER1,
+            USER2,
+            address(0),
+            matchingCommissionBps
+        );
+        vm.stopPrank();
+        // Verify commission was set
+        Payments.RailView memory rail1 = payments.getRail(railId1);
+        assertEq(rail1.commissionRateBps, matchingCommissionBps, "Rail 1 commission mismatch");
+
+        // Attempt 3: Operator tries to create rail below the limit (0 BPS)
+        uint256 lowerCommissionBps = 0;
+        vm.startPrank(OPERATOR);
+        // This call should also succeed (no revert)
+        uint256 railId2 = payments.createRail(
+            address(token),
+            USER1,
+            USER2,
+            address(0),
+            lowerCommissionBps
+        );
+        vm.stopPrank();
+        // Verify commission was set
+        Payments.RailView memory rail2 = payments.getRail(railId2);
+        assertEq(rail2.commissionRateBps, lowerCommissionBps, "Rail 2 commission mismatch");
+    }
+
+    function testSettlementWithOperatorCommission() public {
+        // Setup operator approval first
+        helper.setupOperatorApproval(
+            USER1, // from
+            OPERATOR,
+            10 ether, // rate allowance 
+            100 ether // lockup allowance
+        );
+
+        // Create rail with 2% operator commission (200 BPS)
+        uint256 operatorCommissionBps = 200;
+        uint256 railId;
+        vm.startPrank(OPERATOR);
+        railId = payments.createRail(
+            address(token),
+            USER1,
+            USER2,
+            address(0), // no arbiter
+            operatorCommissionBps
+        );
+        vm.stopPrank();
+
+        // Set rail parameters using modify functions
+        uint256 rate = 10 ether;
+        uint256 lockupPeriod = 5;
+        vm.startPrank(OPERATOR);
+        payments.modifyRailPayment(railId, rate, 0);
+        payments.modifyRailLockup(railId, lockupPeriod, 0); // no fixed lockup
+        vm.stopPrank();
+
+        // Advance time
+        uint256 elapsedBlocks = 5;
+        helper.advanceBlocks(elapsedBlocks);
+
+        // --- Balances Before ---        
+        Payments.Account memory payerBefore = helper.getAccountData(USER1);
+        Payments.Account memory payeeBefore = helper.getAccountData(USER2);
+        Payments.Account memory operatorBefore = helper.getAccountData(OPERATOR);
+        uint256 feesBefore = payments.accumulatedFees(address(token));
+
+        // --- Settle Rail --- 
+        vm.startPrank(USER1); // Any participant can settle
+        (uint256 settledAmount, uint256 netPayeeAmount, uint256 paymentFee, uint256 operatorCommission, uint256 settledUpto,) = 
+            payments.settleRail(railId, block.number);
+        vm.stopPrank();
+
+        // --- Expected Calculations --- 
+        uint256 expectedSettledAmount = rate * elapsedBlocks;
+        uint256 expectedPaymentFee = (expectedSettledAmount * payments.PAYMENT_FEE_BPS()) / payments.COMMISSION_MAX_BPS();
+        uint256 amountAfterPaymentFee = expectedSettledAmount - expectedPaymentFee;
+        uint256 expectedOperatorCommission = (amountAfterPaymentFee * operatorCommissionBps) / payments.COMMISSION_MAX_BPS();
+        uint256 expectedNetPayeeAmount = amountAfterPaymentFee - expectedOperatorCommission;
+
+        // --- Verification --- 
+
+        // 1. Return values from settleRail
+        assertEq(settledAmount, expectedSettledAmount, "Returned settledAmount incorrect");
+        assertEq(netPayeeAmount, expectedNetPayeeAmount, "Returned netPayeeAmount incorrect");
+        assertEq(paymentFee, expectedPaymentFee, "Returned paymentFee incorrect");
+        assertEq(operatorCommission, expectedOperatorCommission, "Returned operatorCommission incorrect");
+        assertEq(settledUpto, block.number, "Returned settledUpto incorrect");
+
+        // 2. Balances after settlement
+        Payments.Account memory payerAfter = helper.getAccountData(USER1);
+        Payments.Account memory payeeAfter = helper.getAccountData(USER2);
+        Payments.Account memory operatorAfter = helper.getAccountData(OPERATOR);
+        uint256 feesAfter = payments.accumulatedFees(address(token));
+
+        assertEq(payerAfter.funds, payerBefore.funds - expectedSettledAmount, "Payer funds mismatch");
+        assertEq(payeeAfter.funds, payeeBefore.funds + expectedNetPayeeAmount, "Payee funds mismatch");
+        assertEq(operatorAfter.funds, operatorBefore.funds + expectedOperatorCommission, "Operator funds mismatch");
+        assertEq(feesAfter, feesBefore + expectedPaymentFee, "Accumulated fees mismatch");
+        
+        // --- Test Fees Withdrawal and Subsequent Fee Accumulation ---
+        
+        // 3. Check the fee tokens array before withdrawal
+        (address[] memory tokensBeforeWithdrawal, uint256[] memory amountsBeforeWithdrawal, uint256 countBeforeWithdrawal) = 
+            payments.getAllAccumulatedFees();
+            
+        // Should only have one token with accumulated fees
+        assertEq(countBeforeWithdrawal, 1, "Should have 1 fee token before withdrawal");
+        assertEq(tokensBeforeWithdrawal[0], address(token), "Fee token address mismatch");
+        assertEq(amountsBeforeWithdrawal[0], feesAfter, "Fee amount mismatch");
+        
+        // 4. Withdraw all accumulated fees
+        vm.prank(OWNER);
+        payments.withdrawFees(address(token), OWNER, feesAfter);
+        
+        // Verify fees are now zero but token is still in the array
+        (address[] memory tokensAfterWithdrawal, uint256[] memory amountsAfterWithdrawal, uint256 countAfterWithdrawal) = 
+            payments.getAllAccumulatedFees();
+            
+        assertEq(countAfterWithdrawal, 1, "Fee token count should not change after withdrawal");
+        assertEq(tokensAfterWithdrawal[0], address(token), "Fee token should remain in array after withdrawal");
+        assertEq(amountsAfterWithdrawal[0], 0, "Fee amount should be zero after withdrawal");
+        assertEq(payments.accumulatedFees(address(token)), 0, "Accumulated fees should be zero after withdrawal");
+        
+        // 5. Accumulate more fees by settling again
+        // Advance more blocks
+        helper.advanceBlocks(5);
+        
+        vm.prank(USER1);
+        (uint256 newSettledAmount, , uint256 newPaymentFee, , ,) = payments.settleRail(railId, block.number);
+        
+        uint256 expectedNewFee = (newSettledAmount * payments.PAYMENT_FEE_BPS()) / payments.COMMISSION_MAX_BPS();
+        assertEq(newPaymentFee, expectedNewFee, "New payment fee incorrect");
+        
+        // 6. Verify no duplicate tokens were added after resettlement
+        (address[] memory tokensAfterResettlement, uint256[] memory amountsAfterResettlement, uint256 countAfterResettlement) = 
+            payments.getAllAccumulatedFees();
+            
+        assertEq(countAfterResettlement, 1, "Should still have only 1 fee token after resettlement");
+        assertEq(tokensAfterResettlement[0], address(token), "Fee token address should not change");
+        assertEq(amountsAfterResettlement[0], expectedNewFee, "New fee amount incorrect");
+        assertEq(payments.accumulatedFees(address(token)), expectedNewFee, "Accumulated fees incorrect after resettlement");
     }
 }
