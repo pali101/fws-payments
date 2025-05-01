@@ -1575,10 +1575,13 @@ contract Payments is
         count = feeTokens.length;
         tokens = new address[](count);
         amounts = new uint256[](count);
-        for (uint256 i = 0; i < count; i++) {
+        for (uint256 i = 0; i < count; ) {
             address token = feeTokens[i];
             tokens[i] = token;
             amounts[i] = accumulatedFees[token];
+            unchecked {
+                ++i;
+            }
         }
 
         return (tokens, amounts, count);
@@ -1631,12 +1634,17 @@ contract Payments is
         RailInfo[] memory tempResults = new RailInfo[](railsLength);
         uint256 resultCount = 0;
 
-        for (uint256 i = 0; i < railsLength; i++) {
+        for (uint256 i = 0; i < railsLength; ) {
             uint256 railId = allRailIds[i];
             Rail storage rail = rails[railId];
 
             // Skip non-existent rails
-            if (rail.from == address(0)) continue;
+            if (rail.from == address(0)) {
+                unchecked {
+                    ++i;
+                }
+                continue;
+            }
 
             // Add rail to our temporary array
             tempResults[resultCount] = RailInfo({
@@ -1645,6 +1653,9 @@ contract Payments is
                 endEpoch: rail.endEpoch
             });
             resultCount++;
+            unchecked {
+                ++i;
+            }
         }
 
         // Create correctly sized final result array
@@ -1652,8 +1663,11 @@ contract Payments is
 
         // Only copy if we have results (avoid unnecessary operations)
         if (resultCount > 0) {
-            for (uint256 i = 0; i < resultCount; i++) {
+            for (uint256 i = 0; i < resultCount; ) {
                 result[i] = tempResults[i];
+                unchecked {
+                    ++i;
+                }
             }
         }
 
