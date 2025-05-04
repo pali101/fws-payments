@@ -917,18 +917,26 @@ contract Payments is
         );
 
         Rail storage rail = rails[railId];
-        Account storage payer = accounts[rail.token][rail.from];
+
+        // Cache frequently used fields from rail stuct to avoid repeated storage reads
+        // Note: we are only using for early checks and not after function calls like _settleSegment or _settleWithRateChanges which might update rail struct
+        address token = rail.token;
+        address from = rail.from;
+        uint256 settledUpTo = rail.settledUpTo;
+        uint256 endEpoch = rail.endEpoch;
+
+        Account storage payer = accounts[token][from];
 
         // Handle terminated and fully settled rails that are still not finalised
 
-        if (isRailTerminated(rail) && rail.settledUpTo >= rail.endEpoch) {
+        if (isRailTerminated(rail) && settledUpTo >= endEpoch) {
             finalizeTerminatedRail(rail, payer);
             return (
                 0,
                 0,
                 0,
                 0,
-                rail.settledUpTo,
+                settledUpTo,
                 "rail fully settled and finalized"
             );
         }
@@ -938,10 +946,10 @@ contract Payments is
         if (!isRailTerminated(rail)) {
             maxSettlementEpoch = min(untilEpoch, payer.lockupLastSettledAt);
         } else {
-            maxSettlementEpoch = min(untilEpoch, rail.endEpoch);
+            maxSettlementEpoch = min(untilEpoch, endEpoch);
         }
 
-        uint256 startEpoch = rail.settledUpTo;
+        uint256 startEpoch = settledUpTo;
         // Nothing to settle (already settled or zero-duration)
         if (startEpoch >= maxSettlementEpoch) {
             return (
@@ -957,10 +965,12 @@ contract Payments is
             );
         }
 
+        bool isRateQueueEmpty = rail.rateChangeQueue.isEmpty();
+
         // For zero rate rails with empty queue, just advance the settlement epoch
         // without transferring funds
         uint256 currentRate = rail.paymentRate;
-        if (currentRate == 0 && rail.rateChangeQueue.isEmpty()) {
+        if (currentRate == 0 && isRateQueueEmpty) {
             rail.settledUpTo = maxSettlementEpoch;
 
             return
@@ -978,7 +988,7 @@ contract Payments is
         }
 
         // Process settlement depending on whether rate changes exist
-        if (rail.rateChangeQueue.isEmpty()) {
+        if (isRateQueueEmpty) {
             (
                 uint256 amount,
                 uint256 netPayeeAmount,
