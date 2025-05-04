@@ -1493,17 +1493,18 @@ contract Payments is
         uint256 oldRate,
         uint256 newRate
     ) internal {
+        uint256 rateUsage = approval.rateUsage;
         if (newRate > oldRate) {
             uint256 rateIncrease = newRate - oldRate;
             require(
-                approval.rateUsage + rateIncrease <= approval.rateAllowance,
+                rateUsage + rateIncrease <= approval.rateAllowance,
                 "operation exceeds operator rate allowance"
             );
-            approval.rateUsage += rateIncrease;
+            approval.rateUsage = rateUsage + rateIncrease;
         } else if (oldRate > newRate) {
             uint256 rateDecrease = oldRate - newRate;
-            approval.rateUsage = approval.rateUsage > rateDecrease
-                ? approval.rateUsage - rateDecrease
+            approval.rateUsage = rateUsage > rateDecrease
+                ? rateUsage - rateDecrease
                 : 0;
         }
     }
