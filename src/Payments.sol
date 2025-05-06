@@ -659,8 +659,10 @@ contract Payments is
         settleAccountLockupBeforeAndAfterForRail(railId, false, oneTimePayment)
     {
         Rail storage rail = rails[railId];
-        Account storage payer = accounts[rail.token][rail.from];
-        Account storage payee = accounts[rail.token][rail.to];
+        address token = rail.token;
+        address from = rail.from;
+        Account storage payer = accounts[token][from];
+        Account storage payee = accounts[token][rail.to];
 
         uint256 oldRate = rail.paymentRate;
         bool isTerminated = isRailTerminated(rail);
@@ -710,9 +712,9 @@ contract Payments is
         rail.lockupFixed = rail.lockupFixed - oneTimePayment;
         rail.paymentRate = newRate;
 
-        OperatorApproval storage operatorApproval = operatorApprovals[
-            rail.token
-        ][rail.from][rail.operator];
+        OperatorApproval storage operatorApproval = operatorApprovals[token][
+            from
+        ][rail.operator];
 
         // Update payer's lockup rate - only if the rail is not terminated
         // for terminated rails, the payer's lockup rate is already updated during rail termination
