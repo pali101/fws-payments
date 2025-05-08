@@ -15,7 +15,7 @@ interface IArbiter {
         // The actual payment amount determined by the arbiter after arbitration of a rail during settlement
         uint256 modifiedAmount;
         // The epoch up to and including which settlement should occur.
-        uint256 settleUpto;
+        uint64 settleUpto;
         // A placeholder note for any additional information the arbiter wants to send to the caller of `settleRail`
         string note;
     }
@@ -24,9 +24,9 @@ interface IArbiter {
         uint256 railId,
         uint256 proposedAmount,
         // the epoch up to and including which the rail has already been settled
-        uint256 fromEpoch,
+        uint64 fromEpoch,
         // the epoch up to and including which arbitration is requested; payment will be arbitrated for (toEpoch - fromEpoch) epochs
-        uint256 toEpoch,
+        uint64 toEpoch,
         uint256 rate
     ) external returns (ArbitrationResult memory result);
 }
