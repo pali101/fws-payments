@@ -150,7 +150,7 @@ contract Payments is
         uint256 totalNetPayeeAmount;
         uint256 totalPaymentFee;
         uint256 totalOperatorCommission;
-        uint256 processedEpoch;
+        uint64 processedEpoch;
         string note;
     }
 
@@ -818,7 +818,7 @@ contract Payments is
         uint256 amount,
         address token,
         address operator,
-        uint256 commissionRateBps
+        uint16 commissionRateBps
     )
         internal
         returns (
@@ -1180,7 +1180,7 @@ contract Payments is
         // Process each segment until we reach the target epoch or hit an early exit condition
         while (state.processedEpoch < targetEpoch) {
             (
-                uint256 segmentEndBoundary,
+                uint64 segmentEndBoundary,
                 uint256 segmentRate
             ) = _getNextSegmentBoundary(
                     rateQueue,
@@ -1267,9 +1267,9 @@ contract Payments is
     function _getNextSegmentBoundary(
         RateChangeQueue.Queue storage rateQueue,
         uint256 currentRate,
-        uint256 processedEpoch,
-        uint256 targetEpoch
-    ) internal view returns (uint256 segmentEndBoundary, uint256 segmentRate) {
+        uint64 processedEpoch,
+        uint64 targetEpoch
+    ) internal view returns (uint64 segmentEndBoundary, uint256 segmentRate) {
         // Default boundary is the target we want to reach
         segmentEndBoundary = targetEpoch;
         segmentRate = currentRate;
@@ -1285,7 +1285,7 @@ contract Payments is
             );
 
             // Boundary is the minimum of our target or the next rate change epoch
-            segmentEndBoundary = min(targetEpoch, nextRateChange.untilEpoch);
+            segmentEndBoundary = min64(targetEpoch, nextRateChange.untilEpoch);
             segmentRate = nextRateChange.rate;
         }
     }
