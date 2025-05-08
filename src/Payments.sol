@@ -488,7 +488,7 @@ contract Payments is
         address from,
         address to,
         address arbiter,
-        uint256 commissionRateBps
+        uint16 commissionRateBps
     )
         external
         nonReentrant
@@ -518,7 +518,7 @@ contract Payments is
         rail.to = to;
         rail.operator = operator;
         rail.arbiter = arbiter;
-        rail.settledUpTo = block.number;
+        rail.settledUpTo = uint64(block.number);
         rail.endEpoch = 0;
         rail.commissionRateBps = commissionRateBps;
 
@@ -539,7 +539,7 @@ contract Payments is
     /// @custom:constraint Operator must have sufficient lockup allowance to cover any increases the lockup period or the fixed lockup.
     function modifyRailLockup(
         uint256 railId,
-        uint256 period,
+        uint64 period,
         uint256 lockupFixed
     )
         external
@@ -560,7 +560,7 @@ contract Payments is
 
     function modifyTerminatedRailLockup(
         Rail storage rail,
-        uint256 period,
+        uint64 period,
         uint256 lockupFixed
     ) internal {
         require(
@@ -595,7 +595,7 @@ contract Payments is
 
     function modifyNonTerminatedRailLockup(
         Rail storage rail,
-        uint256 period,
+        uint64 period,
         uint256 lockupFixed
     ) internal {
         Account storage payer = accounts[rail.token][rail.from];
@@ -755,7 +755,7 @@ contract Payments is
         uint256 newRate,
         uint256 oneTimePayment
     ) internal {
-        uint256 endEpoch = maxSettlementEpochForTerminatedRail(rail);
+        uint64 endEpoch = maxSettlementEpochForTerminatedRail(rail);
         require(
             newRate == 0 && oneTimePayment == 0,
             "for terminated rails beyond last settlement epoch, both new rate and one-time payment must be 0"
@@ -810,7 +810,7 @@ contract Payments is
             // For arbitrated rails, we need to enqueue the old rate.
             // This ensures that the old rate is applied up to and including the current block.
             // The new rate will be applicable starting from the next block.
-            rail.rateChangeQueue.enqueue(oldRate, block.number);
+            rail.rateChangeQueue.enqueue(oldRate, uint64(block.number));
         }
     }
 
@@ -915,12 +915,12 @@ contract Payments is
             uint256 totalNetPayeeAmount,
             uint256 totalPaymentFee,
             uint256 totalOperatorCommission,
-            uint256 finalSettledEpoch,
+            uint64 finalSettledEpoch,
             string memory note
         )
     {
         // Verify the current epoch is greater than the max settlement epoch
-        uint256 maxSettleEpoch = maxSettlementEpochForTerminatedRail(
+        uint64 maxSettleEpoch = maxSettlementEpochForTerminatedRail(
             rails[railId]
         );
         require(
@@ -942,7 +942,7 @@ contract Payments is
     /// @return note Additional information about the settlement (especially from arbitration).
     function settleRail(
         uint256 railId,
-        uint256 untilEpoch
+        uint64 untilEpoch
     )
         public
         nonReentrant
@@ -954,7 +954,7 @@ contract Payments is
             uint256 totalNetPayeeAmount,
             uint256 totalPaymentFee,
             uint256 totalOperatorCommission,
-            uint256 finalSettledEpoch,
+            uint64 finalSettledEpoch,
             string memory note
         )
     {
