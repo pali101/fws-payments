@@ -793,7 +793,7 @@ contract Payments is
 
         // If there is no arbiter, settle the rail immediately
         if (rail.arbiter == address(0)) {
-            (, , , , uint256 settledUpto, ) = settleRail(railId, block.number);
+            (, , , , uint256 settledUpto, ) = settleRail(railId, uint64(block.number));
             require(
                 settledUpto == block.number,
                 "failed to settle rail up to current epoch"
@@ -963,7 +963,7 @@ contract Payments is
 
     function settleRailInternal(
         uint256 railId,
-        uint256 untilEpoch,
+        uint64 untilEpoch,
         bool skipArbitration
     )
         internal
@@ -972,7 +972,7 @@ contract Payments is
             uint256 totalNetPayeeAmount,
             uint256 totalPaymentFee,
             uint256 totalOperatorCommission,
-            uint256 finalSettledEpoch,
+            uint64 finalSettledEpoch,
             string memory note
         )
     {
@@ -998,14 +998,14 @@ contract Payments is
         }
 
         // Calculate the maximum settlement epoch based on account lockup
-        uint256 maxSettlementEpoch;
+        uint64 maxSettlementEpoch;
         if (!isRailTerminated(rail)) {
-            maxSettlementEpoch = min(untilEpoch, payer.lockupLastSettledAt);
+            maxSettlementEpoch = min64(untilEpoch, payer.lockupLastSettledAt);
         } else {
-            maxSettlementEpoch = min(untilEpoch, rail.endEpoch);
+            maxSettlementEpoch = min64(untilEpoch, rail.endEpoch);
         }
 
-        uint256 startEpoch = rail.settledUpTo;
+        uint64 startEpoch = rail.settledUpTo;
         // Nothing to settle (already settled or zero-duration)
         if (startEpoch >= maxSettlementEpoch) {
             return (
@@ -1094,12 +1094,12 @@ contract Payments is
         uint256 totalNetPayeeAmount,
         uint256 totalPaymentFee,
         uint256 totalOperatorCommission,
-        uint256 finalEpoch,
+        uint64 finalEpoch,
         string memory regularNote,
         string memory finalizedNote
     )
         internal
-        returns (uint256, uint256, uint256, uint256, uint256, string memory)
+        returns (uint256, uint256, uint256, uint256, uint64, string memory)
     {
         // Check if rail is a terminated rail that's now fully settled
         if (
@@ -1152,8 +1152,8 @@ contract Payments is
     function _settleWithRateChanges(
         uint256 railId,
         uint256 currentRate,
-        uint256 startEpoch,
-        uint256 targetEpoch,
+        uint64 startEpoch,
+        uint64 targetEpoch,
         bool skipArbitration
     )
         internal
@@ -1292,8 +1292,8 @@ contract Payments is
 
     function _settleSegment(
         uint256 railId,
-        uint256 epochStart,
-        uint256 epochEnd,
+        uint64 epochStart,
+        uint64 epochEnd,
         uint256 rate,
         bool skipArbitration
     )
@@ -1318,7 +1318,7 @@ contract Payments is
         // Calculate the default settlement values (without arbitration)
         uint256 duration = epochEnd - epochStart;
         uint256 settledAmount = rate * duration;
-        uint256 settledUntilEpoch = epochEnd;
+        uint64 settledUntilEpoch = epochEnd;
         note = "";
 
         // If this rail has an arbiter and we're not skipping arbitration, let it decide on the final settlement amount
@@ -1412,9 +1412,9 @@ contract Payments is
     // returns the actual epoch upto and including which the lockup was settled
     function settleAccountLockup(
         Account storage account
-    ) internal returns (uint256) {
-        uint256 currentEpoch = block.number;
-        uint256 elapsedTime = currentEpoch - account.lockupLastSettledAt;
+    ) internal returns (uint64) {
+        uint64 currentEpoch = uint64(block.number);
+        uint64 elapsedTime = currentEpoch - account.lockupLastSettledAt;
 
         if (elapsedTime <= 0) {
             return account.lockupLastSettledAt;
@@ -1446,7 +1446,7 @@ contract Payments is
         }
 
         // Round down to the nearest whole epoch
-        uint256 fractionalEpochs = availableFunds / account.lockupRate;
+        uint64 fractionalEpochs = uint64(availableFunds / account.lockupRate);
 
         // Apply lockup up to this point
         account.lockupCurrent += account.lockupRate * fractionalEpochs;
@@ -1458,7 +1458,7 @@ contract Payments is
 
     function remainingEpochsForTerminatedRail(
         Rail storage rail
-    ) internal view returns (uint256) {
+    ) internal view returns (uint64) {
         require(isRailTerminated(rail), "rail is not terminated");
 
         // If current block beyond end epoch, return 0
@@ -1467,7 +1467,7 @@ contract Payments is
         }
 
         // Return the number of epochs (blocks) remaining until end epoch
-        return rail.endEpoch - block.number;
+        return rail.endEpoch - uint64(block.number);
     }
 
     function isRailTerminated(Rail storage rail) internal view returns (bool) {
@@ -1481,7 +1481,7 @@ contract Payments is
     // Get the final settlement epoch for a terminated rail
     function maxSettlementEpochForTerminatedRail(
         Rail storage rail
-    ) internal view returns (uint256) {
+    ) internal view returns (uint64) {
         require(isRailTerminated(rail), "rail is not terminated");
         return rail.endEpoch;
     }
@@ -1683,5 +1683,9 @@ contract Payments is
 }
 
 function min(uint256 a, uint256 b) pure returns (uint256) {
+    return a < b ? a : b;
+}
+
+function min64(uint64 a, uint64 b) pure returns (uint64) {
     return a < b ? a : b;
 }
