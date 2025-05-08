@@ -28,7 +28,7 @@ contract RailSettlementHelpers is Test {
         uint256 netPayeeAmount;
         uint256 paymentFee;
         uint256 operatorCommission;
-        uint256 settledUpto;
+        uint64 settledUpto;
         string note;
     }
 
@@ -38,7 +38,7 @@ contract RailSettlementHelpers is Test {
         address operator,
         address arbiter,
         uint256[] memory rates,
-        uint256 lockupPeriod,
+        uint64 lockupPeriod,
         uint256 lockupFixed
     ) public returns (uint256) {
         require(
@@ -95,7 +95,7 @@ contract RailSettlementHelpers is Test {
         address to,
         address operator,
         uint256 paymentRate,
-        uint256 lockupPeriod,
+        uint64 lockupPeriod,
         uint256 fundAmount,
         uint256 fixedLockup
     ) public returns (uint256) {
@@ -126,9 +126,9 @@ contract RailSettlementHelpers is Test {
 
     function settleRailAndVerify(
         uint256 railId,
-        uint256 untilEpoch,
+        uint64 untilEpoch,
         uint256 expectedAmount,
-        uint256 expectedUpto
+        uint64 expectedUpto
     ) public returns (SettlementResult memory result) {
         console.log("settleRailAndVerify");
         // Get the rail details to identify payer and payee
@@ -153,7 +153,7 @@ contract RailSettlementHelpers is Test {
         uint256 netPayeeAmount;
         uint256 paymentFee;
         uint256 operatorCommission;
-        uint256 settledUpto;
+        uint64 settledUpto;
         string memory note;
 
         vm.startPrank(payer);
@@ -224,7 +224,7 @@ contract RailSettlementHelpers is Test {
     function terminateAndSettleRail(
         uint256 railId,
         uint256 expectedAmount,
-        uint256 expectedUpto
+        uint64 expectedUpto
     ) public returns (SettlementResult memory result) {
         // Get rail details to extract client and operator addresses
         Payments.RailView memory rail = payments.getRail(railId);
@@ -251,7 +251,7 @@ contract RailSettlementHelpers is Test {
         return
             settleRailAndVerify(
                 railId,
-                block.number,
+                uint64(block.number),
                 expectedAmount,
                 expectedUpto
             );
@@ -262,7 +262,7 @@ contract RailSettlementHelpers is Test {
         uint256 railId,
         address operator,
         uint256 newRate,
-        uint256 newLockupPeriod,
+        uint64 newLockupPeriod,
         uint256 newFixedLockup
     ) public {
         Payments.RailView memory railBefore = paymentsContract.getRail(railId);
