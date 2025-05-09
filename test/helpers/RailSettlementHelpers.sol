@@ -149,39 +149,25 @@ contract RailSettlementHelpers is Test {
         console.log("payeeFundsBefore", payeeAccountBefore.funds);
         console.log("payeeLockupBefore", payeeAccountBefore.lockupCurrent);
 
-        uint256 settlementAmount;
-        uint256 netPayeeAmount;
-        uint256 paymentFee;
-        uint256 operatorCommission;
-        uint64 settledUpto;
-        string memory note;
-
         vm.startPrank(payer);
-        (
-            settlementAmount,
-            netPayeeAmount,
-            paymentFee,
-            operatorCommission,
-            settledUpto,
-            note
-        ) = payments.settleRail(railId, untilEpoch);
+         (result.totalAmount, result.netPayeeAmount, result.paymentFee, result.operatorCommission, result.settledUpto, result.note) = payments.settleRail(railId, untilEpoch);
         vm.stopPrank();
 
-        console.log("settlementAmount", settlementAmount);
-        console.log("netPayeeAmount", netPayeeAmount);
-        console.log("paymentFee", paymentFee);
-        console.log("operatorCommission", operatorCommission);
-        console.log("settledUpto", settledUpto);
-        console.log("note", note);
+        console.log("settlementAmount", result.totalAmount);
+        console.log("netPayeeAmount", result.netPayeeAmount);
+        console.log("paymentFee", result.paymentFee);
+        console.log("operatorCommission", result.operatorCommission);
+        console.log("settledUpto", result.settledUpto);
+        console.log("note", result.note);
 
         // Verify results
         assertEq(
-            settlementAmount,
+            result.totalAmount,
             expectedAmount,
             "Settlement amount doesn't match expected"
         );
         assertEq(
-            settledUpto,
+            result.settledUpto,
             expectedUpto,
             "Settled upto doesn't match expected"
         );
@@ -198,27 +184,17 @@ contract RailSettlementHelpers is Test {
 
         assertEq(
             payerAccountBefore.funds - payerAccountAfter.funds,
-            settlementAmount,
+            result.totalAmount,
             "Payer's balance reduction doesn't match settlement amount"
         );
         assertEq(
             payeeAccountAfter.funds - payeeAccountBefore.funds,
-            netPayeeAmount,
+            result.netPayeeAmount,
             "Payee's balance increase doesn't match net payee amount"
         );
 
         rail = payments.getRail(railId);
         assertEq(rail.settledUpTo, expectedUpto, "Rail settled upto incorrect");
-
-        return
-            SettlementResult(
-                settlementAmount,
-                netPayeeAmount,
-                paymentFee,
-                operatorCommission,
-                settledUpto,
-                note
-            );
     }
 
     function terminateAndSettleRail(
