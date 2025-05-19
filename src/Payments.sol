@@ -612,40 +612,48 @@ contract Payments is
         uint256 period,
         uint256 lockupFixed
     ) internal {
-        Account storage payer = accounts[rail.token][rail.from];
+        address from = rail.from;
+        address token = rail.token;
+        uint256 currentLockupPeriod = rail.lockupPeriod;
+        uint256 currentLockupFixed = rail.lockupFixed;
+        uint256 currentPaymentRate = rail.paymentRate;
+
+        Account storage payer = accounts[token][from];
+
+        uint256 payerLockupCurrent = payer.lockupCurrent;
 
         // Don't allow changing the lockup period or increasing the fixed lockup unless the payer's
         // account is fully settled.
         if (!isAccountLockupFullySettled(payer)) {
             require(
-                period == rail.lockupPeriod,
+                period == currentLockupPeriod,
                 "cannot change the lockup period: insufficient funds to cover the current lockup"
             );
             require(
-                lockupFixed <= rail.lockupFixed,
+                lockupFixed <= currentLockupFixed,
                 "cannot increase the fixed lockup: insufficient funds to cover the current lockup"
             );
         }
 
         // Calculate current (old) lockup.
-        uint256 oldLockup = rail.lockupFixed +
-            (rail.paymentRate * rail.lockupPeriod);
+        uint256 oldLockup = currentLockupFixed +
+            (currentPaymentRate * currentLockupPeriod);
 
         // Calculate new lockup amount with new parameters
-        uint256 newLockup = lockupFixed + (rail.paymentRate * period);
+        uint256 newLockup = lockupFixed + (currentPaymentRate * period);
 
         require(
-            payer.lockupCurrent >= oldLockup,
+            payerLockupCurrent >= oldLockup,
             "payer's current lockup cannot be less than old lockup"
         );
 
         // We blindly update the payer's lockup. If they don't have enough funds to cover the new
         // amount, we'll revert in the post-condition.
-        payer.lockupCurrent = payer.lockupCurrent - oldLockup + newLockup;
+        payer.lockupCurrent = payerLockupCurrent - oldLockup + newLockup;
 
         OperatorApproval storage operatorApproval = operatorApprovals[
-            rail.token
-        ][rail.from][rail.operator];
+            token
+        ][from][rail.operator];
         updateOperatorLockupUsage(operatorApproval, oldLockup, newLockup);
 
         // Update rail lockup parameters
