@@ -361,12 +361,22 @@ contract Payments is
         settleAccountLockupBeforeAndAfterForRail(railId, false, 0)
     {
         Rail storage rail = rails[railId];
-        Account storage payer = accounts[rail.token][rail.from];
+
+        // cache reused variables (Rail) to reduce SLOAD operations
+        address token = rail.token;
+        address from = rail.from;
+        address operator = rail.operator;
+        uint256 paymentRate = rail.paymentRate;
+
+        Account storage payer = accounts[token][from];
+
+        // cache reused variable (from Account) 
+        uint256 lockupRate = payer.lockupRate;
 
         // Only client with fully settled lockup or operator can terminate a rail
         require(
-            (msg.sender == rail.from && isAccountLockupFullySettled(payer)) ||
-                msg.sender == rail.operator,
+            (msg.sender == from && isAccountLockupFullySettled(payer)) ||
+                msg.sender == operator,
             "caller is not authorized: must be operator or client with settled lockup"
         );
 
@@ -378,16 +388,16 @@ contract Payments is
         // lock funds for the rail beyond `rail.endEpoch` as we're exiting the rail
         // after that epoch.
         require(
-            payer.lockupRate >= rail.paymentRate,
+            lockupRate >= paymentRate,
             "lockup rate inconsistency"
         );
-        payer.lockupRate -= rail.paymentRate;
+        payer.lockupRate = lockupRate - paymentRate;
 
         // Reduce operator rate allowance
         OperatorApproval storage operatorApproval = operatorApprovals[
-            rail.token
-        ][rail.from][rail.operator];
-        updateOperatorRateUsage(operatorApproval, rail.paymentRate, 0);
+            token
+        ][from][operator];
+        updateOperatorRateUsage(operatorApproval, paymentRate, 0);
     }
 
     /// @notice Deposits tokens from the message sender's account into `to`'s account.
