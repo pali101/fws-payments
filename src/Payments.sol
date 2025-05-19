@@ -572,30 +572,35 @@ contract Payments is
         uint256 period,
         uint256 lockupFixed
     ) internal {
+        uint256 originalLockupFixed = rail.lockupFixed;
+        address token = rail.token;
+        address from = rail.from;
+
         require(
-            period == rail.lockupPeriod && lockupFixed <= rail.lockupFixed,
+            period == rail.lockupPeriod && lockupFixed <= originalLockupFixed,
             "failed to modify terminated rail: cannot change period or increase fixed lockup"
         );
 
-        Account storage payer = accounts[rail.token][rail.from];
+        Account storage payer = accounts[token][from];
+        uint256 payerLockupCurrent = payer.lockupCurrent;
 
         // Calculate the fixed lockup reduction - this is the only change allowed for terminated rails
-        uint256 lockupReduction = rail.lockupFixed - lockupFixed;
+        uint256 lockupReduction = originalLockupFixed - lockupFixed;
 
         // Update payer's lockup - subtract the exact reduction amount
         require(
-            payer.lockupCurrent >= lockupReduction,
+            payerLockupCurrent >= lockupReduction,
             "payer's current lockup cannot be less than lockup reduction"
         );
-        payer.lockupCurrent -= lockupReduction;
+        payer.lockupCurrent = payerLockupCurrent - lockupReduction;
 
         // Reduce operator rate allowance
         OperatorApproval storage operatorApproval = operatorApprovals[
-            rail.token
-        ][rail.from][rail.operator];
+            token
+        ][from][rail.operator];
         updateOperatorLockupUsage(
             operatorApproval,
-            rail.lockupFixed,
+            originalLockupFixed,
             lockupFixed
         );
 
