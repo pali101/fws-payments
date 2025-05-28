@@ -18,6 +18,7 @@ contract RailSettlementTest is Test, BaseTestHelper {
     MockERC20 token;
 
     uint256 constant DEPOSIT_AMOUNT = 200 ether;
+    uint256 constant MAX_LOCKUP_PERIOD = 100;
 
     function setUp() public {
         helper = new PaymentsTestHelpers();
@@ -228,7 +229,8 @@ contract RailSettlementTest is Test, BaseTestHelper {
             USER1, // from
             OPERATOR,
             10,
-            100 ether
+            100 ether,
+            MAX_LOCKUP_PERIOD // lockup period
         );
 
         // Create a rail with the arbiter
@@ -578,7 +580,8 @@ contract RailSettlementTest is Test, BaseTestHelper {
             USER1, // from
             OPERATOR,
             10 ether, // rate allowance
-            100 ether // lockup allowance
+            100 ether, // lockup allowance
+            MAX_LOCKUP_PERIOD // max lockup period
         );
 
         // Create rail with 2% operator commission (200 BPS)
