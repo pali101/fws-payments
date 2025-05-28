@@ -8,6 +8,7 @@ import {MockERC20} from "./mocks/MockERC20.sol";
 import {PaymentsTestHelpers} from "./helpers/PaymentsTestHelpers.sol";
 import {BaseTestHelper} from "./helpers/BaseTestHelper.sol";
 import {console} from "forge-std/console.sol";
+
 contract AccountLockupSettlementTest is Test, BaseTestHelper {
     PaymentsTestHelpers helper;
     Payments payments;
@@ -35,6 +36,7 @@ contract AccountLockupSettlementTest is Test, BaseTestHelper {
         helper.makeDeposit(USER1, USER1, DEPOSIT_AMOUNT);
 
         // No rails created, so lockup rate should be 0
+        helper.assertAccountState(USER1, DEPOSIT_AMOUNT, 0, 0, block.number);
 
         // Advance blocks to create a settlement gap without a rate
         helper.advanceBlocks(10);
@@ -50,6 +52,28 @@ contract AccountLockupSettlementTest is Test, BaseTestHelper {
             0,
             block.number
         );
+    }
+
+    function testFullWithdrawalWithNoLockup() public {
+        // deposit funds
+        helper.makeDeposit(USER1, USER1, DEPOSIT_AMOUNT * 2);
+
+        // withdraw funds
+        helper.makeWithdrawal(USER1, DEPOSIT_AMOUNT * 2);
+
+        // verify withdrawal occurred
+        helper.assertAccountState(USER1, 0, 0, 0, block.number);
+    }
+
+    function testZeroDepositZeroWithdrawalNoOp() public {
+        // attempt to deposit zero tokens
+        helper.makeDeposit(USER1, USER1, 0);
+
+        // attempt to withdraw zero tokens
+        helper.makeWithdrawal(USER1, 0);
+
+        // verify that account state is unchanged (no funds, no lockup, no rate)
+        helper.assertAccountState(USER1, 0, 0, 0, block.number);
     }
 
     function testSimpleLockupAccumulation() public {
