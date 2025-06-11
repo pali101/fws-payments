@@ -318,8 +318,8 @@ contract Payments is
         bool approved,
         uint256 rateAllowance,
         uint256 lockupAllowance,
-        uint256 maxLockupPeriod
-    ) external validateNonZeroAddress(operator, "operator") {
+         uint256 maxLockupPeriod
+    ) external nonReentrant validateNonZeroAddress(operator, "operator") {
         OperatorApproval storage approval = operatorApprovals[token][
             msg.sender
         ][operator];
