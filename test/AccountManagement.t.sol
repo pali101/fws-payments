@@ -203,7 +203,9 @@ contract AccountManagementTest is Test, BaseTestHelper {
             0, // no payment rate
             0, // no lockup period
             lockedAmount, // fixed lockup of half the deposit
-            address(0) // no fixed lockup
+            address(0), // no fixed lockup
+            SERVICE_FEE_RECIPIENT // operator commision receiver
+
         );
 
         // Verify lockup worked by checking account state
@@ -250,7 +252,9 @@ contract AccountManagementTest is Test, BaseTestHelper {
             lockupRate, // payment rate (creates lockup rate)
             10, // lockup period
             0, // no fixed lockup
-            address(0) // no fixed lockup
+            address(0), // no fixed lockup
+            SERVICE_FEE_RECIPIENT // operator commision receiver
+
         );
 
         // Create a second rail to get to 1 ether lockup rate on the account
@@ -261,7 +265,9 @@ contract AccountManagementTest is Test, BaseTestHelper {
             lockupRate, // payment rate (creates another 0.5 ether/block lockup rate)
             10, // lockup period
             0, // no fixed lockup
-            address(0) // no fixed lockup
+            address(0), // no fixed lockup
+            SERVICE_FEE_RECIPIENT // operator commision receiver
+
         );
 
         // Advance 10 blocks to create settlement gap
@@ -325,7 +331,8 @@ contract AccountManagementTest is Test, BaseTestHelper {
             0,
             0,
             fixedLockup,
-            address(0)
+            address(0),
+            SERVICE_FEE_RECIPIENT // operator commision receiver
         );
 
         // Get account info
@@ -396,7 +403,8 @@ contract AccountManagementTest is Test, BaseTestHelper {
             lockupRate,
             lockupPeriod,
             0,
-            address(0)
+            address(0),
+            SERVICE_FEE_RECIPIENT // operator commision receiver
         );
 
         // Advance 5 blocks
@@ -451,7 +459,8 @@ contract AccountManagementTest is Test, BaseTestHelper {
             lockupRate,
             lockupPeriod,
             0,
-            address(0)
+            address(0),
+            SERVICE_FEE_RECIPIENT // operator commision receiver
         );
 
         // Advance blocks to create partial settlement
@@ -506,7 +515,8 @@ contract AccountManagementTest is Test, BaseTestHelper {
             lockupRate,
             lockupPeriod,
             0,
-            address(0)
+            address(0),
+            SERVICE_FEE_RECIPIENT // operator commision receiver
         );
 
         // Advance blocks to create debt
@@ -551,7 +561,8 @@ contract AccountManagementTest is Test, BaseTestHelper {
             initialRate,
             lockupPeriod,
             0,
-            address(0)
+            address(0),
+            SERVICE_FEE_RECIPIENT // operator commision receiver
         );
 
         // Advance some blocks
