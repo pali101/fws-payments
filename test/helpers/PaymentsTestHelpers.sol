@@ -152,15 +152,11 @@ contract PaymentsTestHelpers is Test, BaseTestHelper {
         );
 
         assertEq(
-            paymentsBalanceAfter,
-            paymentsBalanceBefore + amount,
-            "Payments contract balance not increased correctly"
+            paymentsBalanceAfter, paymentsBalanceBefore + amount, "Payments contract balance not increased correctly"
         );
-        
+
         assertEq(
-            toAccountAfter.funds,
-            toAccountBefore.funds + amount,
-            "Recipient's account balance not increased correctly"
+            toAccountAfter.funds, toAccountBefore.funds + amount, "Recipient's account balance not increased correctly"
         );
     }
 
@@ -742,7 +738,7 @@ contract PaymentsTestHelpers is Test, BaseTestHelper {
         uint256 maxLockupPeriod
     ) public {
         address from = vm.addr(fromPrivateKey);
-        address to = from; 
+        address to = from;
         uint256 deadline = block.timestamp + 1 hours;
 
         // Capture pre-deposit balances and state
@@ -751,13 +747,7 @@ contract PaymentsTestHelpers is Test, BaseTestHelper {
         Payments.Account memory toAccountBefore = _getAccountData(to, false);
 
         // get signature for permit
-        (uint8 v, bytes32 r, bytes32 s) = getPermitSignature(
-            fromPrivateKey,
-            from,
-            address(payments),
-            amount,
-            deadline
-        );
+        (uint8 v, bytes32 r, bytes32 s) = getPermitSignature(fromPrivateKey, from, address(payments), amount, deadline);
 
         // Execute deposit with permit
         vm.startPrank(from);
@@ -785,18 +775,17 @@ contract PaymentsTestHelpers is Test, BaseTestHelper {
         Payments.Account memory toAccountAfter = _getAccountData(to, false);
 
         // Asserts / Checks
-        _assertDepositBalances(fromBalanceBefore, fromBalanceAfter, paymentsBalanceBefore, paymentsBalanceAfter, toAccountBefore, toAccountAfter, amount);
-
-        verifyOperatorAllowances(
-            from,
-            operator,
-            approved,
-            rateAllowance,
-            lockupAllowance,
-            0,
-            0,
-            maxLockupPeriod
+        _assertDepositBalances(
+            fromBalanceBefore,
+            fromBalanceAfter,
+            paymentsBalanceBefore,
+            paymentsBalanceAfter,
+            toAccountBefore,
+            toAccountAfter,
+            amount
         );
+
+        verifyOperatorAllowances(from, operator, approved, rateAllowance, lockupAllowance, 0, 0, maxLockupPeriod);
     }
 
     function expectInvalidPermitAndOperatorApprovalToRevert(
@@ -815,13 +804,7 @@ contract PaymentsTestHelpers is Test, BaseTestHelper {
         address from = vm.addr(senderSk);
 
         // Make permit signature from notFromSk, but call from 'from'
-        (uint8 v, bytes32 r, bytes32 s) = getPermitSignature(
-            notSenderSk, 
-            from,
-            address(payments), 
-            amount, 
-            deadline
-        );
+        (uint8 v, bytes32 r, bytes32 s) = getPermitSignature(notSenderSk, from, address(payments), amount, deadline);
 
         // Capture pre-deposit balances and state
         uint256 fromBalanceBefore = _balanceOf(from, false);
@@ -831,19 +814,15 @@ contract PaymentsTestHelpers is Test, BaseTestHelper {
         vm.startPrank(from);
 
         // Expect custom error: ERC2612InvalidSigner(wrongRecovered, expectedOwner)
-        vm.expectRevert(
-            abi.encodeWithSignature(
-                "ERC2612InvalidSigner(address,address)",
-                vm.addr(notSenderSk),
-                from
-            )
-        );
+        vm.expectRevert(abi.encodeWithSignature("ERC2612InvalidSigner(address,address)", vm.addr(notSenderSk), from));
         payments.depositWithPermitAndOperatorApproval(
-            address(testToken), 
-            from, 
-            amount, 
-            deadline, 
-            v, r, s,
+            address(testToken),
+            from,
+            amount,
+            deadline,
+            v,
+            r,
+            s,
             operator,
             approved,
             rateAllowance,
@@ -859,13 +838,15 @@ contract PaymentsTestHelpers is Test, BaseTestHelper {
 
         // Asserts / Checks
         _assertDepositBalances(
-            fromBalanceBefore,  
+            fromBalanceBefore,
             fromBalanceAfter,
             paymentsBalanceBefore,
             paymentsBalanceAfter,
             toAccountBefore,
             toAccountAfter,
-            0
+            0 // No funds should have been transferred due to revert
         );
+
+        verifyOperatorAllowances(from, operator, false, 0, 0, 0, 0, 0); // No values should have been set due to revert - expect defaults
     }
 }
