@@ -1,0 +1,3 @@
+# Normalize line endings for Solidity files in src and test
+src/**/*.sol text eol=lf
+test/**/*.sol text eol=lf
