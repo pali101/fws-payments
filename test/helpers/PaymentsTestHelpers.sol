@@ -732,7 +732,6 @@ contract PaymentsTestHelpers is Test, BaseTestHelper {
         uint256 fromPrivateKey,
         uint256 amount,
         address operator,
-        bool approved,
         uint256 rateAllowance,
         uint256 lockupAllowance,
         uint256 maxLockupPeriod
@@ -752,7 +751,7 @@ contract PaymentsTestHelpers is Test, BaseTestHelper {
         // Execute deposit with permit
         vm.startPrank(from);
 
-        payments.depositWithPermitAndOperatorApproval(
+        payments.depositWithPermitAndApproveOperator(
             address(testToken),
             from,
             amount,
@@ -761,7 +760,6 @@ contract PaymentsTestHelpers is Test, BaseTestHelper {
             r,
             s,
             operator,
-            approved,
             rateAllowance,
             lockupAllowance,
             maxLockupPeriod
@@ -785,14 +783,13 @@ contract PaymentsTestHelpers is Test, BaseTestHelper {
             amount
         );
 
-        verifyOperatorAllowances(from, operator, approved, rateAllowance, lockupAllowance, 0, 0, maxLockupPeriod);
+        verifyOperatorAllowances(from, operator, true, rateAllowance, lockupAllowance, 0, 0, maxLockupPeriod);
     }
 
     function expectInvalidPermitAndOperatorApprovalToRevert(
         uint256 senderSk,
         uint256 amount,
         address operator,
-        bool approved,
         uint256 rateAllowance,
         uint256 lockupAllowance,
         uint256 maxLockupPeriod
@@ -815,7 +812,7 @@ contract PaymentsTestHelpers is Test, BaseTestHelper {
 
         // Expect custom error: ERC2612InvalidSigner(wrongRecovered, expectedOwner)
         vm.expectRevert(abi.encodeWithSignature("ERC2612InvalidSigner(address,address)", vm.addr(notSenderSk), from));
-        payments.depositWithPermitAndOperatorApproval(
+        payments.depositWithPermitAndApproveOperator(
             address(testToken),
             from,
             amount,
@@ -824,7 +821,6 @@ contract PaymentsTestHelpers is Test, BaseTestHelper {
             r,
             s,
             operator,
-            approved,
             rateAllowance,
             lockupAllowance,
             maxLockupPeriod

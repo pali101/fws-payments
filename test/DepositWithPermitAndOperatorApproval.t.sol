@@ -30,13 +30,13 @@ contract DepositWithPermitAndOperatorApproval is Test, BaseTestHelper {
 
     function testDepositWithPermitAndOperatorApproval_HappyPath() public {
         helper.makeDepositWithPermitAndOperatorApproval(
-            user1Sk, DEPOSIT_AMOUNT, OPERATOR, true, RATE_ALLOWANCE, LOCKUP_ALLOWANCE, MAX_LOCKUP_PERIOD
+            user1Sk, DEPOSIT_AMOUNT, OPERATOR, RATE_ALLOWANCE, LOCKUP_ALLOWANCE, MAX_LOCKUP_PERIOD
         );
     }
 
     function testDepositWithPermitAndOperatorApproval_ZeroAmount() public {
         helper.makeDepositWithPermitAndOperatorApproval(
-            user1Sk, 0, OPERATOR, true, RATE_ALLOWANCE, LOCKUP_ALLOWANCE, MAX_LOCKUP_PERIOD
+            user1Sk, 0, OPERATOR, RATE_ALLOWANCE, LOCKUP_ALLOWANCE, MAX_LOCKUP_PERIOD
         );
     }
 
@@ -45,16 +45,16 @@ contract DepositWithPermitAndOperatorApproval is Test, BaseTestHelper {
         uint256 secondDepositAmount = 300 ether;
 
         helper.makeDepositWithPermitAndOperatorApproval(
-            user1Sk, firstDepositAmount, OPERATOR, true, RATE_ALLOWANCE, LOCKUP_ALLOWANCE, MAX_LOCKUP_PERIOD
+            user1Sk, firstDepositAmount, OPERATOR, RATE_ALLOWANCE, LOCKUP_ALLOWANCE, MAX_LOCKUP_PERIOD
         );
         helper.makeDepositWithPermitAndOperatorApproval(
-            user1Sk, secondDepositAmount, OPERATOR, true, RATE_ALLOWANCE, LOCKUP_ALLOWANCE, MAX_LOCKUP_PERIOD
+            user1Sk, secondDepositAmount, OPERATOR, RATE_ALLOWANCE, LOCKUP_ALLOWANCE, MAX_LOCKUP_PERIOD
         );
     }
 
     function testDepositWithPermitAndOperatorApproval_InvalidPermitReverts() public {
         helper.expectInvalidPermitAndOperatorApprovalToRevert(
-            user1Sk, DEPOSIT_AMOUNT, OPERATOR, true, RATE_ALLOWANCE, LOCKUP_ALLOWANCE, MAX_LOCKUP_PERIOD
+            user1Sk, DEPOSIT_AMOUNT, OPERATOR, RATE_ALLOWANCE, LOCKUP_ALLOWANCE, MAX_LOCKUP_PERIOD
         );
     }
 }
