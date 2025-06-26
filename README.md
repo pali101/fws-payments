@@ -86,7 +86,7 @@ Deposits tokens using EIP-2612 permit.
   - Caller must have signed the permit
   - Permit must be valid and not expired
 
-#### `depositWithPermitAndOperatorApproval(address token, address to, uint256 amount, uint256 deadline, uint8 v, bytes32 r, bytes32 s, address operator, bool approved, uint256 rateAllowance, uint256 lockupAllowance, uint256 maxLockupPeriod)`
+#### `depositWithPermitAndApproveOperator(address token, address to, uint256 amount, uint256 deadline, uint8 v, bytes32 r, bytes32 s, address operator, uint256 rateAllowance, uint256 lockupAllowance, uint256 maxLockupPeriod)`
 
 Deposits tokens using EIP-2612 permit and sets operator approval in a single transaction.
 
@@ -97,7 +97,6 @@ Deposits tokens using EIP-2612 permit and sets operator approval in a single tra
   - `deadline`: Permit expiration timestamp
   - `v`, `r`, `s`: Signature components for EIP-2612 permit signature
   - `operator`: Address to grant permissions to
-  - `approved`: Whether the operator is approved
   - `rateAllowance`: Maximum payment rate the operator can set across all rails
   - `lockupAllowance`: Maximum funds the operator can lock for future payments
   - `maxLockupPeriod`: Maximum allowed lockup period in epochs
