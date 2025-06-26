@@ -1097,8 +1097,7 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
 
         // Calculate the default settlement values (without validation)
         uint256 duration = epochEnd - epochStart;
-        uint256 expectedSettledAmount = rate * duration;
-        uint256 settledAmount = expectedSettledAmount;
+        uint256 settledAmount = rate * duration;
         uint256 settledUntilEpoch = epochEnd;
         note = "";
 
@@ -1130,6 +1129,8 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
 
         // Verify payer has sufficient lockup for the settlement
         require(payer.lockupCurrent >= settledAmount, "failed to settle: insufficient lockup to cover settlement");
+        uint256 actualSettledDuration = settledUntilEpoch - epochStart;
+        uint256 requiredLockup = rate * actualSettledDuration;
 
         // Transfer funds from payer (always pays full settled amount)
         payer.funds -= settledAmount;
@@ -1141,8 +1142,10 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
         // Credit payee
         payee.funds += netPayeeAmount;
 
-        // Reduce the lockup by the expected settled amount previously added to the current lockup
-        payer.lockupCurrent -= expectedSettledAmount;
+        // Reduce lockup based on actual settled duration, not requested duration
+        // so that if the validator only settles for a partial duration, we only reduce the client lockup by the actual locked amount
+        // for that reduced duration.
+        payer.lockupCurrent -= requiredLockup;
 
         // Update the rail's settled epoch
         rail.settledUpTo = settledUntilEpoch;
