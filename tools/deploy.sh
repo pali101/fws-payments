@@ -5,6 +5,9 @@
 #          ./tools/deploy.sh 314 (mainnet)
 #          ./tools/deploy.sh 31415926 (devnet)
 #
+if [ -f ".env" ]; then
+  export $(grep -v '^#' .env | xargs)
+fi
 set -euo pipefail
 
 CHAIN_ID=${1:-314159} # Default to calibnet
