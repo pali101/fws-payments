@@ -276,7 +276,7 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
     /// @notice Updates the approval status and allowances for an operator on behalf of the message sender.
     /// @param token The ERC20 token address for which the approval is being set.
     /// @param operator The address of the operator whose approval is being modified.
-    /// @param approved Whether the operator is approved (true) or not (false) to create new rails>
+    /// @param approved Whether the operator is approved (true) or not (false) to create new rails.
     /// @param rateAllowance The maximum payment rate the operator can set across all rails created by the operator on behalf of the message sender. If this is less than the current payment rate, the operator will only be able to reduce rates until they fall below the target.
     /// @param lockupAllowance The maximum amount of funds the operator can lock up on behalf of the message sender towards future payments. If this exceeds the current total amount of funds locked towards future payments, the operator will only be able to reduce future lockup.
     /// @param maxLockupPeriod The maximum number of epochs (blocks) the operator can lock funds for. If this is less than the current lockup period for a rail, the operator will only be able to reduce the lockup period.
@@ -288,6 +288,17 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
         uint256 lockupAllowance,
         uint256 maxLockupPeriod
     ) external nonReentrant validateNonZeroAddress(operator, "operator") {
+        _setOperatorApproval(token, operator, approved, rateAllowance, lockupAllowance, maxLockupPeriod);
+    }
+
+    function _setOperatorApproval(
+        address token,
+        address operator,
+        bool approved,
+        uint256 rateAllowance,
+        uint256 lockupAllowance,
+        uint256 maxLockupPeriod
+    ) internal {
         OperatorApproval storage approval = operatorApprovals[token][msg.sender][operator];
 
         // Update approval status and allowances
@@ -379,6 +390,18 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
         bytes32 r,
         bytes32 s
     ) external nonReentrant validateNonZeroAddress(to, "to") settleAccountLockupBeforeAndAfter(token, to, false) {
+        _depositWithPermit(token, to, amount, deadline, v, r, s);
+    }
+
+    function _depositWithPermit(
+        address token,
+        address to,
+        uint256 amount,
+        uint256 deadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) internal {
         // Revert if token is address(0) as permit is not supported for native tokens
         require(token != address(0), "depositWithPermit: native token not supported");
 
@@ -390,6 +413,48 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
         account.funds += amount;
 
         emit DepositWithPermit(token, to, amount);
+    }
+
+    /**
+     * @notice Deposits tokens using permit (EIP-2612) approval in a single transaction,
+     *         while also setting operator approval.
+     * @param token The ERC20 token address to deposit and for which the operator approval is being set.
+     *             Note: The token must support EIP-2612 permit functionality.
+     * @param to The address whose account will be credited (must be the permit signer).
+     * @param amount The amount of tokens to deposit.
+     * @param deadline Permit deadline (timestamp).
+     * @param v,r,s Permit signature.
+     * @param operator The address of the operator whose approval is being modified.
+     * @param rateAllowance The maximum payment rate the operator can set across all rails created by the operator
+     *             on behalf of the message sender. If this is less than the current payment rate, the operator will
+     *             only be able to reduce rates until they fall below the target.
+     * @param lockupAllowance The maximum amount of funds the operator can lock up on behalf of the message sender
+     *             towards future payments. If this exceeds the current total amount of funds locked towards future payments,
+     *             the operator will only be able to reduce future lockup.
+     * @param maxLockupPeriod The maximum number of epochs (blocks) the operator can lock funds for. If this is less than
+     *             the current lockup period for a rail, the operator will only be able to reduce the lockup period.
+     */
+    function depositWithPermitAndApproveOperator(
+        address token,
+        address to,
+        uint256 amount,
+        uint256 deadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s,
+        address operator,
+        uint256 rateAllowance,
+        uint256 lockupAllowance,
+        uint256 maxLockupPeriod
+    )
+        external
+        nonReentrant
+        validateNonZeroAddress(operator, "operator")
+        validateNonZeroAddress(to, "to")
+        settleAccountLockupBeforeAndAfter(token, to, false)
+    {
+        _setOperatorApproval(token, operator, true, rateAllowance, lockupAllowance, maxLockupPeriod);
+        _depositWithPermit(token, to, amount, deadline, v, r, s);
     }
 
     /// @notice Withdraws tokens from the caller's account to the caller's account, up to the amount of currently available tokens (the tokens not currently locked in rails).

@@ -17,7 +17,7 @@ contract PaymentsTestHelpers is Test, BaseTestHelper {
     uint256 internal constant MAX_LOCKUP_PERIOD = 100;
 
     Payments public payments;
-    IERC20 public testToken;
+    MockERC20 public testToken;
 
     // Standard test environment setup with common addresses and token
     function setupStandardTestEnvironment() public {
@@ -126,14 +126,38 @@ contract PaymentsTestHelpers is Test, BaseTestHelper {
         Payments.Account memory toAccountAfter = _getAccountData(to, false);
 
         // Asserts / Checks
+        _assertDepositBalances(
+            fromBalanceBefore,
+            fromBalanceAfter,
+            paymentsBalanceBefore,
+            paymentsBalanceAfter,
+            toAccountBefore,
+            toAccountAfter,
+            amount
+        );
+    }
+
+    function _assertDepositBalances(
+        uint256 fromBalanceBefore,
+        uint256 fromBalanceAfter,
+        uint256 paymentsBalanceBefore,
+        uint256 paymentsBalanceAfter,
+        Payments.Account memory toAccountBefore,
+        Payments.Account memory toAccountAfter,
+        uint256 amount
+    ) private pure {
         assertEq(fromBalanceAfter, fromBalanceBefore - amount, "Sender's balance not reduced correctly");
         assertEq(
             paymentsBalanceAfter, paymentsBalanceBefore + amount, "Payments contract balance not increased correctly"
         );
+
+        assertEq(
+            paymentsBalanceAfter, paymentsBalanceBefore + amount, "Payments contract balance not increased correctly"
+        );
+
         assertEq(
             toAccountAfter.funds, toAccountBefore.funds + amount, "Recipient's account balance not increased correctly"
         );
-        console.log("toAccountAfter.funds", toAccountAfter.funds);
     }
 
     function getAccountData(address user) public view returns (Payments.Account memory) {
@@ -247,7 +271,7 @@ contract PaymentsTestHelpers is Test, BaseTestHelper {
         );
     }
 
-    function _balanceOf(address addr, bool useNativeToken) private returns (uint256) {
+    function _balanceOf(address addr, bool useNativeToken) private view returns (uint256) {
         if (useNativeToken) {
             return addr.balance;
         } else {
@@ -702,5 +726,123 @@ contract PaymentsTestHelpers is Test, BaseTestHelper {
         vm.expectRevert(abi.encodeWithSignature("ERC2612InvalidSigner(address,address)", vm.addr(notSenderSk), from));
         payments.depositWithPermit(address(testToken), to, amount, deadline, v, r, s);
         vm.stopPrank();
+    }
+
+    function makeDepositWithPermitAndOperatorApproval(
+        uint256 fromPrivateKey,
+        uint256 amount,
+        address operator,
+        uint256 rateAllowance,
+        uint256 lockupAllowance,
+        uint256 maxLockupPeriod
+    ) public {
+        address from = vm.addr(fromPrivateKey);
+        address to = from;
+        uint256 deadline = block.timestamp + 1 hours;
+
+        // Capture pre-deposit balances and state
+        uint256 fromBalanceBefore = _balanceOf(from, false);
+        uint256 paymentsBalanceBefore = _balanceOf(address(payments), false);
+        Payments.Account memory toAccountBefore = _getAccountData(to, false);
+
+        // get signature for permit
+        (uint8 v, bytes32 r, bytes32 s) = getPermitSignature(fromPrivateKey, from, address(payments), amount, deadline);
+
+        // Execute deposit with permit
+        vm.startPrank(from);
+
+        payments.depositWithPermitAndApproveOperator(
+            address(testToken),
+            from,
+            amount,
+            deadline,
+            v,
+            r,
+            s,
+            operator,
+            rateAllowance,
+            lockupAllowance,
+            maxLockupPeriod
+        );
+
+        vm.stopPrank();
+
+        // Capture post-deposit balances and state
+        uint256 fromBalanceAfter = _balanceOf(from, false);
+        uint256 paymentsBalanceAfter = _balanceOf(address(payments), false);
+        Payments.Account memory toAccountAfter = _getAccountData(to, false);
+
+        // Asserts / Checks
+        _assertDepositBalances(
+            fromBalanceBefore,
+            fromBalanceAfter,
+            paymentsBalanceBefore,
+            paymentsBalanceAfter,
+            toAccountBefore,
+            toAccountAfter,
+            amount
+        );
+
+        verifyOperatorAllowances(from, operator, true, rateAllowance, lockupAllowance, 0, 0, maxLockupPeriod);
+    }
+
+    function expectInvalidPermitAndOperatorApprovalToRevert(
+        uint256 senderSk,
+        uint256 amount,
+        address operator,
+        uint256 rateAllowance,
+        uint256 lockupAllowance,
+        uint256 maxLockupPeriod
+    ) public {
+        uint256 deadline = block.timestamp + 1 hours;
+        address to = vm.addr(senderSk); // Use the sender's address as recipient
+
+        uint256 notSenderSk = senderSk == user1Sk ? user2Sk : user1Sk;
+        address from = vm.addr(senderSk);
+
+        // Make permit signature from notFromSk, but call from 'from'
+        (uint8 v, bytes32 r, bytes32 s) = getPermitSignature(notSenderSk, from, address(payments), amount, deadline);
+
+        // Capture pre-deposit balances and state
+        uint256 fromBalanceBefore = _balanceOf(from, false);
+        uint256 paymentsBalanceBefore = _balanceOf(address(payments), false);
+        Payments.Account memory toAccountBefore = _getAccountData(to, false);
+
+        vm.startPrank(from);
+
+        // Expect custom error: ERC2612InvalidSigner(wrongRecovered, expectedOwner)
+        vm.expectRevert(abi.encodeWithSignature("ERC2612InvalidSigner(address,address)", vm.addr(notSenderSk), from));
+        payments.depositWithPermitAndApproveOperator(
+            address(testToken),
+            from,
+            amount,
+            deadline,
+            v,
+            r,
+            s,
+            operator,
+            rateAllowance,
+            lockupAllowance,
+            maxLockupPeriod
+        );
+        vm.stopPrank();
+
+        // Capture post-deposit balances and state
+        uint256 fromBalanceAfter = _balanceOf(from, false);
+        uint256 paymentsBalanceAfter = _balanceOf(address(payments), false);
+        Payments.Account memory toAccountAfter = _getAccountData(to, false);
+
+        // Asserts / Checks
+        _assertDepositBalances(
+            fromBalanceBefore,
+            fromBalanceAfter,
+            paymentsBalanceBefore,
+            paymentsBalanceAfter,
+            toAccountBefore,
+            toAccountAfter,
+            0 // No funds should have been transferred due to revert
+        );
+
+        verifyOperatorAllowances(from, operator, false, 0, 0, 0, 0, 0); // No values should have been set due to revert - expect defaults
     }
 }

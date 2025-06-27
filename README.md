@@ -70,6 +70,37 @@ Deposits tokens into a specified account.
 - **Requirements**:
   - Caller must have approved the contract to transfer tokens
 
+#### `depositWithPermit(address token, address to, uint256 amount, uint256 deadline, uint8 v, bytes32 r, bytes32 s)`
+
+Deposits tokens using EIP-2612 permit.
+
+- **Parameters**:
+  - `token`: ERC20 token contract address supporting EIP-2612 permits
+  - `to`: Recipient account address (must be the signer of the permit)
+  - `amount`: Token amount to deposit
+  - `deadline`: Permit expiration timestamp
+  - `v`, `r`, `s`: Signature components for EIP-2612 permit signature
+
+- **Requirements**:
+  - Token must support EIP-2612 permit
+  - Caller must have signed the permit
+  - Permit must be valid and not expired
+
+#### `depositWithPermitAndApproveOperator(address token, address to, uint256 amount, uint256 deadline, uint8 v, bytes32 r, bytes32 s, address operator, uint256 rateAllowance, uint256 lockupAllowance, uint256 maxLockupPeriod)`
+
+Deposits tokens using EIP-2612 permit and sets operator approval in a single transaction.
+
+- **Parameters**:
+  - `token`: ERC20 token contract address supporting EIP-2612 permits
+  - `to`: Recipient account address (must be the signer of the permit)
+  - `amount`: Token amount to deposit
+  - `deadline`: Permit expiration timestamp
+  - `v`, `r`, `s`: Signature components for EIP-2612 permit signature
+  - `operator`: Address to grant permissions to
+  - `rateAllowance`: Maximum payment rate the operator can set across all rails
+  - `lockupAllowance`: Maximum funds the operator can lock for future payments
+  - `maxLockupPeriod`: Maximum allowed lockup period in epochs
+
 #### `withdraw(address token, uint256 amount)`
 
 Withdraws available tokens from caller's account to caller's wallet.
@@ -93,7 +124,7 @@ Withdraws available tokens from caller's account to a specified address.
 
 ### Operator Management
 
-#### `setOperatorApproval(address token, address operator, bool approved, uint256 rateAllowance, uint256 lockupAllowance)`
+#### `setOperatorApproval(address token, address operator, bool approved, uint256 rateAllowance, uint256 lockupAllowance, uint256 maxLockupPeriod)`
 
 Configures an operator's permissions to manage rails on behalf of the caller.
 
@@ -103,6 +134,7 @@ Configures an operator's permissions to manage rails on behalf of the caller.
   - `approved`: Whether the operator is approved
   - `rateAllowance`: Maximum payment rate the operator can set across all rails
   - `lockupAllowance`: Maximum funds the operator can lock for future payments
+  - `maxLockupPeriod`: Maximum allowed lockup period in epochs
 
 ### Rail Management
 
