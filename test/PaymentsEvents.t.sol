@@ -165,17 +165,12 @@ contract PaymentsEventsTest is Test, BaseTestHelper {
         // calcualate expected values
         Payments.RailView memory rail = payments.getRail(railId);
         uint256 oneTimeAmount = 5 ether;
-        uint256 expectedPaymentFee = (oneTimeAmount * payments.PAYMENT_FEE_BPS()) / payments.COMMISSION_MAX_BPS();
-        uint256 amountAfterPaymentFee = oneTimeAmount - expectedPaymentFee;
-        uint256 expectedOperatorCommission =
-            (amountAfterPaymentFee * rail.commissionRateBps) / payments.COMMISSION_MAX_BPS();
-        uint256 expectedNetPayeeAmount = oneTimeAmount - expectedPaymentFee - expectedOperatorCommission;
+        uint256 expectedOperatorCommission = (oneTimeAmount * rail.commissionRateBps) / payments.COMMISSION_MAX_BPS();
+        uint256 expectedNetPayeeAmount = oneTimeAmount - expectedOperatorCommission;
 
         // expect the event to be emitted
         vm.expectEmit(true, false, false, true);
-        emit Payments.RailOneTimePaymentProcessed(
-            railId, expectedNetPayeeAmount, expectedPaymentFee, expectedOperatorCommission
-        );
+        emit Payments.RailOneTimePaymentProcessed(railId, expectedNetPayeeAmount, expectedOperatorCommission);
 
         // Execute one-time payment by calling modifyRailPayment with the current rate and a one-time payment amount
 
@@ -224,16 +219,13 @@ contract PaymentsEventsTest is Test, BaseTestHelper {
         // expected values
         Payments.RailView memory rail = payments.getRail(railId);
         uint256 totalSettledAmount = 5 * rail.paymentRate;
-        uint256 totalPaymentFee = (totalSettledAmount * payments.PAYMENT_FEE_BPS()) / payments.COMMISSION_MAX_BPS();
-        uint256 totalAmountAfterPaymentFee = totalSettledAmount - totalPaymentFee;
-        uint256 totalOperatorCommission =
-            (totalAmountAfterPaymentFee * rail.commissionRateBps) / payments.COMMISSION_MAX_BPS();
-        uint256 totalNetPayeeAmount = totalAmountAfterPaymentFee - totalOperatorCommission;
+        uint256 totalOperatorCommission = (totalSettledAmount * rail.commissionRateBps) / payments.COMMISSION_MAX_BPS();
+        uint256 totalNetPayeeAmount = totalSettledAmount - totalOperatorCommission;
 
         // Expect the event to be emitted
-        vm.expectEmit(true, false, false, true);
+        vm.expectEmit(true, true, false, true);
         emit Payments.RailSettled(
-            railId, totalSettledAmount, totalNetPayeeAmount, totalPaymentFee, totalOperatorCommission, block.number
+            railId, totalSettledAmount, totalNetPayeeAmount, totalOperatorCommission, block.number
         );
 
         // Settle rail
@@ -367,42 +359,6 @@ contract PaymentsEventsTest is Test, BaseTestHelper {
 
         // Withdraw tokens
         payments.withdraw(address(testToken), 5 ether);
-
-        vm.stopPrank();
-    }
-
-    /**
-     * @dev Test for FeesWithdrawn event
-     */
-    function testFeesWithdrawnEvent() public {
-        // Create and set up a rail
-        railId = helper.createRail(USER1, USER2, OPERATOR, address(0), SERVICE_FEE_RECIPIENT);
-
-        vm.startPrank(OPERATOR);
-        payments.modifyRailPayment(railId, 1 ether, 0);
-        payments.modifyRailLockup(railId, 10, 10 ether);
-
-        // Execute a one-time payment to generate fees
-        // The error was because only the operator can modify the rail payment
-        payments.modifyRailPayment(railId, 1 ether, 5 ether);
-        vm.stopPrank();
-
-        // Check if there are any accumulated fees
-        uint256 accumulatedFees = payments.accumulatedFees(address(testToken));
-        if (accumulatedFees == 0) {
-            // Skip this test if no fees accumulated
-            return;
-        }
-
-        // Owner withdraws fees
-        vm.startPrank(OWNER);
-
-        // expect the event to be emitted
-        vm.expectEmit(true, true, true, true);
-        emit Payments.FeesWithdrawn(address(testToken), OWNER, accumulatedFees);
-
-        // Withdraw fees
-        payments.withdrawFees(address(testToken), OWNER, accumulatedFees);
 
         vm.stopPrank();
     }
