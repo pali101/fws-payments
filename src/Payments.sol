@@ -1122,8 +1122,8 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
                 rail.settledUpTo = segmentEndBoundary;
                 state.processedEpoch = segmentEndBoundary;
 
-                // Remove the processed rate change from the queue if it exists
-                if (!rateQueue.isEmpty()) {
+                // Remove the processed rate change from the queue if it exists AND we have processed it entirely
+                if (!rateQueue.isEmpty() && segmentEndBoundary >= rateQueue.peek().untilEpoch) {
                     rateQueue.dequeue();
                 }
 
@@ -1161,7 +1161,7 @@ contract Payments is Initializable, UUPSUpgradeable, OwnableUpgradeable, Reentra
             state.note = validationNote;
 
             // Remove the processed rate change from the queue
-            if (!rateQueue.isEmpty()) {
+            if (!rateQueue.isEmpty() && segmentEndBoundary >= rateQueue.peek().untilEpoch) {
                 rateQueue.dequeue();
             }
         }
