@@ -33,6 +33,10 @@ The FWS Payments contract enables ERC20 token payment flows through "rails" - au
   - [Rail Termination (by operator)](#rail-termination-by-operator)
   - [Rail Settlement Without Validation](#rail-settlement-without-validation)
   - [Client Reducing Operator Allowance After Deal Proposal](#client-reducing-operator-allowance-after-deal-proposal)
+- [Contributing](#contributing)
+  - [Before Contributing](#before-contributing)
+  - [Pull Request Guidelines](#pull-request-guidelines)
+  - [Commit Message Guidelines](#commit-message-guidelines)
 - [License](#license)
 
 ## Deployment Info
@@ -744,6 +748,51 @@ Payments.modifyRailPayment(
 
 - Unless absolutely required, clients should refrain from cutting operator allowances for ongoing transactions.
 - In the event that the rate stream cannot be initiated, operators should be prepared for this possibility and utilize one-time payments as a backup.
+
+## Contributing
+
+We welcome contributions to the payments contract! To ensure consistency and quality across the project, please follow these guidelines when contributing.
+
+### Before Contributing
+
+- **New Features**: Always create an issue first and discuss with maintainers before implementing new features. This ensures alignment with project goals and prevents duplicate work.
+- **Bug Fixes**: While you can submit bug fix PRs without prior issues, please include detailed reproduction steps in your PR description.
+
+### Pull Request Guidelines
+
+- **Link to Issue**: All feature PRs should reference a related issue (e.g., "Closes #123" or "Addresses #456").
+- **Clear Description**: Provide a detailed description of what your PR does, why it's needed, and how to test it.
+- **Tests**: Include comprehensive tests for new functionality or bug fixes.
+- **Documentation**: Update relevant documentation for any API or behavior changes.
+
+### Commit Message Guidelines
+
+This project follows the [Conventional Commits specification](https://www.conventionalcommits.org/). All commit messages should be structured as follows:
+
+```
+<type>[optional scope]: <description>
+
+[optional body]
+
+[optional footer(s)]
+```
+
+**Types:**
+- `feat`: A new feature
+- `fix`: A bug fix
+- `docs`: Documentation only changes
+- `style`: Changes that do not affect the meaning of the code (white-space, formatting, missing semi-colons, etc)
+- `refactor`: A code change that neither fixes a bug nor adds a feature
+- `test`: Adding missing tests or correcting existing tests
+- `chore`: Changes to the build process or auxiliary tools and libraries
+
+**Examples:**
+- `feat: add rail termination functionality`
+- `fix: resolve settlement calculation bug`
+- `docs: update README with new API examples`
+- `chore: update dependencies`
+
+Following these conventions helps maintain a clear project history and makes handling of releases and changelogs easier.
 
 ## License
 
