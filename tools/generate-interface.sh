@@ -19,7 +19,7 @@ forge build --force > /dev/null 2>&1
 TEMP_DIR=$(mktemp -d)
 cd "$TEMP_DIR"
 npm init -y > /dev/null
-npm install abi-to-sol > /dev/null
+npm install abi-to-sol --no-save > /dev/null
 
 # Extract ABI using jq
 cd -
