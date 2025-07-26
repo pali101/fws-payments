@@ -79,6 +79,7 @@ transfer-owner: chmod-transfer
 get-owner: chmod-get-owner
 	./tools/get-owner.sh
 
+# Interface generation target
 .PHONY: interface
 interface: chmod-interface
-	./tools/generate-interface.sh
+	./tools/generate-interface.sh src/interfaces/IPayments.sol
