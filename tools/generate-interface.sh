@@ -4,6 +4,8 @@
 set -euo pipefail
 
 OUTPUT_PATH=src/interfaces/IPayments.sol
+ABI_TO_SOL_VERSION="0.8.0"
+SOLIDITY_VERSION="^0.8.27"
 
 # Check for required tools
 for cmd in forge jq npx; do
@@ -22,7 +24,7 @@ mkdir -p "$(dirname "$OUTPUT_PATH")"
 
 # Extract ABI using jq
 echo "Generating interface at $OUTPUT_PATH..."
-jq '.abi' out/Payments.sol/Payments.json | npx abi-to-sol@0.8.0 IPayments --license MIT --solidity-version "^0.8.27" > "$OUTPUT_PATH"
+jq '.abi' out/Payments.sol/Payments.json | npx abi-to-sol@"$ABI_TO_SOL_VERSION" IPayments --license MIT --solidity-version "$SOLIDITY_VERSION" > "$OUTPUT_PATH"
 
 # Remove ABI comments from the generated file
 if [[ "$(uname)" == "Darwin" ]]; then
