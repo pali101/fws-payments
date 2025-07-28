@@ -22,10 +22,10 @@ jobs:
       - name: Install Dependencies
         run: forge install
 
-      - name: Install dependencies for interface generation
-        run: |
-          sudo apt-get install -y jq
-          sudo apt-get install -y nodejs
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "lts/*"
 
       - name: Verify interface
         run: |
