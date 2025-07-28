@@ -25,19 +25,11 @@ jobs:
       - name: Install jq
         run: sudo apt-get install -y jq
 
-      - name: Check interface consistency
-        run: tools/generate-interface.sh temp/IPayments.sol
-
-      - name: Verify interface
-        run: |
-          echo "Verifying interface consistency..."
-          if ! diff -q src/interfaces/IPayments.sol temp/IPayments.sol; then
-            echo "Interface mismatch detected!"
-            echo "Please run 'make interface' to regenerate the interface."
-            exit 1
-          else
-            echo "Interface is consistent."
-          fi
+    - name: Verify interface
+      run: |
+        make interface
+        git diff --exit-code src/interfaces/IPayments.sol || \
+          (echo "Interface out of sync. Run 'make interface' locally and commit the changes."; exit 1)
 
       - name: Clean up temporary files
         run: rm -rf temp
