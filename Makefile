@@ -40,10 +40,6 @@ chmod-transfer:
 chmod-get-owner:
 	chmod +x ./tools/get-owner.sh
 
-.PHONY: chmod-interface
-chmod-interface:
-	chmod +x ./tools/generate-interface.sh
-
 # Deployment targets
 .PHONY: deploy-calibnet
 deploy-calibnet: chmod-deploy
@@ -81,5 +77,5 @@ get-owner: chmod-get-owner
 
 # Interface generation target
 .PHONY: interface
-interface: chmod-interface
-	./tools/generate-interface.sh src/interfaces/IPayments.sol
+interface:
+	bash ./tools/generate-interface.sh

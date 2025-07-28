@@ -22,14 +22,16 @@ jobs:
       - name: Install Dependencies
         run: forge install
 
-      - name: Install jq
-        run: sudo apt-get install -y jq
+      - name: Install dependencies for interface generation
+        run: |
+          sudo apt-get install -y jq
+          sudo apt-get install -y nodejs
 
-    - name: Verify interface
-      run: |
-        make interface
-        git diff --exit-code src/interfaces/IPayments.sol || \
-          (echo "Interface out of sync. Run 'make interface' locally and commit the changes."; exit 1)
+      - name: Verify interface
+        run: |
+          make interface
+          git diff --exit-code src/interfaces/IPayments.sol || \
+            (echo "Interface out of sync. Run 'make interface' locally and commit the changes."; exit 1)
 
       - name: Clean up temporary files
         run: rm -rf temp

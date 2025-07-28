@@ -48,12 +48,10 @@ This script transfers ownership of the Payments contract to a new owner. Require
 ### Interface Generation
 
 #### generate-interface.sh
-This script generates the `IPayments` interface from the compiled ABI using abi-to-sol.
+This script generates the `IPayments` interface from the compiled ABI using abi-to-sol at path `src/interfaces/IPayments.sol`
 
 ```bash
-./tools/generate-interface.sh [output_path]
-# Example: ./tools/generate-interface.sh temp/IPayments.sol
-# Default: src/interfaces/IPayments.sol
+./tools/generate-interface.sh
 ```
 
 ### Environment Variables
@@ -143,12 +141,8 @@ export NEW_OWNER="0x..."
 #### Genarate Interface
 
 ```bash
-# Optionally provide output path
-./tools/generate-interface.sh [output_path]
-# Example:
-./tools/generate-interface.sh temp/IPayments.sol
-# Default:
-# src/interfaces/IPayments.sol
+# Stores interface at src/interfaces/IPayments.sol
+./tools/generate-interface.sh
 ```
 
 ### Example Usage
