@@ -32,6 +32,3 @@ jobs:
           make interface
           git diff --exit-code src/interfaces/IPayments.sol || \
             (echo "Interface out of sync. Run 'make interface' locally and commit the changes."; exit 1)
-
-      - name: Clean up temporary files
-        run: rm -rf temp
